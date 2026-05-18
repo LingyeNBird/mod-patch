@@ -1,6 +1,7 @@
 package com.mskb.nsukpreviewtoggle.client;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Field;
 
 final class SimukraftPreviewBridge {
     private static final String MANAGER_CLASS = "com.xiaoliang.simukraft.client.preview.BuildingPreviewManager";
@@ -10,6 +11,7 @@ final class SimukraftPreviewBridge {
     private static Method isRangeOnlyPreview;
     private static Method loadBlocks;
     private static Method activateRangeOnlyPreview;
+    private static Field rangeOnlyPreview;
 
     private SimukraftPreviewBridge() {
     }
@@ -28,6 +30,7 @@ final class SimukraftPreviewBridge {
 
     static void activateRangeOnlyPreview() throws ReflectiveOperationException {
         activateRangeOnlyPreviewMethod().invoke(null);
+        rangeOnlyPreviewField().setBoolean(null, true);
     }
 
     private static Class<?> managerClass() throws ClassNotFoundException {
@@ -64,5 +67,13 @@ final class SimukraftPreviewBridge {
             activateRangeOnlyPreview.setAccessible(true);
         }
         return activateRangeOnlyPreview;
+    }
+
+    private static Field rangeOnlyPreviewField() throws ReflectiveOperationException {
+        if (rangeOnlyPreview == null) {
+            rangeOnlyPreview = managerClass().getDeclaredField("rangeOnlyPreview");
+            rangeOnlyPreview.setAccessible(true);
+        }
+        return rangeOnlyPreview;
     }
 }
