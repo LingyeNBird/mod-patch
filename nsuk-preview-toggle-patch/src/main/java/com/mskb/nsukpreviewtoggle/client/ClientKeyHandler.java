@@ -4,9 +4,11 @@ import com.mojang.blaze3d.platform.InputConstants;
 import com.mskb.nsukpreviewtoggle.NSUKPreviewTogglePatch;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
 import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
+import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
@@ -27,6 +29,7 @@ public final class ClientKeyHandler {
     public static void register(IEventBus modEventBus) {
         modEventBus.addListener(ClientKeyHandler::registerKeyMappings);
         MinecraftForge.EVENT_BUS.addListener(ClientKeyHandler::onClientTick);
+        MinecraftForge.EVENT_BUS.addListener(ClientKeyHandler::onScreenKeyPressed);
     }
 
     private static void registerKeyMappings(RegisterKeyMappingsEvent event) {
@@ -41,6 +44,19 @@ public final class ClientKeyHandler {
         while (TOGGLE_PREVIEW.consumeClick()) {
             togglePreviewMode();
         }
+    }
+
+    public static void onScreenKeyPressed(ScreenEvent.KeyPressed.Pre event) {
+        if (!isBuildingPreviewScreen(event.getScreen())) {
+            return;
+        }
+
+        if (!TOGGLE_PREVIEW.matches(event.getKeyCode(), event.getScanCode())) {
+            return;
+        }
+
+        event.setCanceled(true);
+        togglePreviewMode();
     }
 
     private static void togglePreviewMode() {
@@ -69,5 +85,16 @@ public final class ClientKeyHandler {
 
     private static void show(LocalPlayer player, String translationKey) {
         player.displayClientMessage(Component.translatable(translationKey), true);
+    }
+
+    private static boolean isBuildingPreviewScreen(Screen screen) {
+        Class<?> screenClass = screen.getClass();
+        while (screenClass != null) {
+            if ("com.xiaoliang.simukraft.client.gui.BuildingPreviewScreen".equals(screenClass.getName())) {
+                return true;
+            }
+            screenClass = screenClass.getSuperclass();
+        }
+        return false;
     }
 }
