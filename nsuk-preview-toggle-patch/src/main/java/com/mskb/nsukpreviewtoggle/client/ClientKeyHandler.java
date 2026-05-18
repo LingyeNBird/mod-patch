@@ -10,7 +10,6 @@ import net.minecraftforge.client.event.RegisterKeyMappingsEvent;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
 import org.lwjgl.glfw.GLFW;
 
 public final class ClientKeyHandler {
@@ -27,14 +26,13 @@ public final class ClientKeyHandler {
 
     public static void register(IEventBus modEventBus) {
         modEventBus.addListener(ClientKeyHandler::registerKeyMappings);
-        MinecraftForge.EVENT_BUS.register(ClientKeyHandler.class);
+        MinecraftForge.EVENT_BUS.addListener(ClientKeyHandler::onClientTick);
     }
 
     private static void registerKeyMappings(RegisterKeyMappingsEvent event) {
         event.register(TOGGLE_PREVIEW);
     }
 
-    @SubscribeEvent
     public static void onClientTick(TickEvent.ClientTickEvent event) {
         if (event.phase != TickEvent.Phase.END) {
             return;
