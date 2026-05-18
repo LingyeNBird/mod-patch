@@ -1,0 +1,8 @@
+{
+  "key.categories.nsukpreviewtoggle": "NSUK Preview Toggle Patch",
+  "key.nsukpreviewtoggle.toggle_preview": "Toggle Large Building Preview Mode",
+  "message.nsukpreviewtoggle.no_preview": "No New Sim-U-Kraft building preview is active.",
+  "message.nsukpreviewtoggle.full_preview": "Switched to full block preview. Warning: very large buildings may freeze or lag the client.",
+  "message.nsukpreviewtoggle.range_preview": "Switched to range-box preview.",
+  "message.nsukpreviewtoggle.error": "Unable to toggle New Sim-U-Kraft preview mode."
+}

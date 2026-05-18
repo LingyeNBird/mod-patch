@@ -1,0 +1,8 @@
+{
+  "key.categories.nsukpreviewtoggle": "NSUK 预览切换补丁",
+  "key.nsukpreviewtoggle.toggle_preview": "切换大型建筑预览模式",
+  "message.nsukpreviewtoggle.no_preview": "当前没有激活的新模拟工艺建筑预览。",
+  "message.nsukpreviewtoggle.full_preview": "已切换到完整方块预览。警告：超大型建筑可能导致客户端卡顿或无响应。",
+  "message.nsukpreviewtoggle.range_preview": "已切换到范围框预览。",
+  "message.nsukpreviewtoggle.error": "无法切换新模拟工艺预览模式。"
+}
