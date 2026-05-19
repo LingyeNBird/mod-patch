@@ -18,7 +18,7 @@ This repository is intended to build on GitHub Actions.
 1. Create a GitHub repository.
 2. Push these files to the repository's `main` or `master` branch.
 3. Open the Actions tab and manually run the `Build NSUK Preview Toggle Patch` workflow.
-4. Enter the release asset jar file name and GitHub Release name.
+4. Enter the GitHub Release name. Leave the jar file name empty to use `[NSUK预览切换]nsuk-preview-toggle-forge-0.<run-number>-1.0.5b3-fix.jar`.
 5. Download the jar from the generated GitHub Release, or from the `nsuk-preview-toggle-patch` workflow artifact.
 
 No local build is required.

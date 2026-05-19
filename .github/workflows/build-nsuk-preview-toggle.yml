@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       jar_filename:
-        description: Release asset jar file name, for example nsuk-preview-toggle-patch.jar
-        required: true
-        default: nsuk-preview-toggle-patch.jar
+        description: Optional release asset jar file name. Leave empty to use the automatic NSUK naming format.
+        required: false
+        default: ''
       release_name:
         description: GitHub Release name
         required: true
@@ -38,6 +38,9 @@ jobs:
         run: |
           set -euo pipefail
           jar_filename='${{ inputs.jar_filename }}'
+          if [[ -z "$jar_filename" ]]; then
+            jar_filename='[NSUK预览切换]nsuk-preview-toggle-forge-0.${{ github.run_number }}-1.0.5b3-fix.jar'
+          fi
           if [[ "$jar_filename" != *.jar || "$jar_filename" == */* || "$jar_filename" == *\\* ]]; then
             echo "jar_filename must be a plain .jar file name without path separators" >&2
             exit 1

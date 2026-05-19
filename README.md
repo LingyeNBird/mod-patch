@@ -10,4 +10,4 @@ This repository can contain multiple independent patch mods. Each patch mod live
 
 Workflows live in the repository-level `.github/workflows/` directory because GitHub only discovers Actions workflows from there. Each workflow builds its corresponding patch subproject from that subdirectory.
 
-Workflows are manually triggered. The NSUK workflow accepts a release asset jar file name and a GitHub Release name, then uploads the built jar as a release asset.
+Workflows are manually triggered. The NSUK workflow accepts an optional release asset jar file name and a GitHub Release name, then uploads the built jar as a release asset. If the jar file name is left empty, the workflow uses `[NSUK预览切换]nsuk-preview-toggle-forge-0.<run-number>-1.0.5b3-fix.jar`.
