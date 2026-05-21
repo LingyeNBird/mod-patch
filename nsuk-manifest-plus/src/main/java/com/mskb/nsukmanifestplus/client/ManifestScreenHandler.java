@@ -155,7 +155,8 @@ public final class ManifestScreenHandler {
 
     public static void handleStockResponse(long requestId, Map<String, Integer> counts) {
         Minecraft minecraft = Minecraft.getInstance();
-        if (!(minecraft.screen instanceof Screen screen) || !isManifestScreen(screen)) {
+        Screen screen = minecraft.screen;
+        if (!isManifestScreen(screen)) {
             return;
         }
 
@@ -173,7 +174,8 @@ public final class ManifestScreenHandler {
 
     public static void handleStockProgress(long requestId, int progressValue, int progressMax) {
         Minecraft minecraft = Minecraft.getInstance();
-        if (!(minecraft.screen instanceof Screen screen) || !isManifestScreen(screen)) {
+        Screen screen = minecraft.screen;
+        if (!isManifestScreen(screen)) {
             return;
         }
 
