@@ -4,15 +4,13 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.client.player.LocalPlayer;
-import net.minecraft.world.item.Item;
+import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
 import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.common.MinecraftForge;
-import net.minecraftforge.registries.ForgeRegistries;
+import com.mskb.nsukmanifestplus.network.ManifestPlusNetwork;
+import com.mskb.nsukmanifestplus.network.ManifestStockRequestPacket;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -31,6 +29,7 @@ public final class ManifestScreenHandler {
 
     private static final WeakHashMap<Screen, ManifestState> STATES = new WeakHashMap<>();
     private static final Reflection REFLECTION = new Reflection();
+    private static long nextRequestId = 1L;
 
     private ManifestScreenHandler() {
     }
@@ -77,6 +76,7 @@ public final class ManifestScreenHandler {
 
         ManifestState state = state(screen);
         drawQuantityOverlay(screen, event.getGuiGraphics(), state);
+        drawProgressOverlay(screen, event.getGuiGraphics(), state);
     }
 
     private static void drawQuantityOverlay(Screen screen, GuiGraphics graphics, ManifestState state) {
@@ -101,15 +101,14 @@ public final class ManifestScreenHandler {
 
                 String itemId = REFLECTION.materialItemId(material);
                 int required = REFLECTION.materialCount(material);
-                int existing = state.counts.getOrDefault(itemId, countPlayerItems(itemId));
-                int missing = Math.max(0, required - existing);
-                int percent = required <= 0 ? 100 : Math.min(100, existing * 100 / required);
-                String text = "-已有" + percent + "%-缺" + missing + "/需" + required;
+                int available = state.counts.getOrDefault(itemId, 0);
+                int missing = Math.max(0, required - available);
+                int existing = Math.max(0, required - missing);
+                String text = existing + "/" + required;
 
                 int y = contentY + i * 24 + 8;
                 int width = Minecraft.getInstance().font.width(text);
                 int x = contentX + contentWidth - width;
-                graphics.fill(x - 2, y - 1, contentX + contentWidth + 1, y + 10, 0xFFF4E7C5);
                 graphics.drawString(Minecraft.getInstance().font, text, x, y, 0xFF333333, false);
             }
         } catch (ReflectiveOperationException ignored) {
@@ -117,21 +116,79 @@ public final class ManifestScreenHandler {
         }
     }
 
+    private static void drawProgressOverlay(Screen screen, GuiGraphics graphics, ManifestState state) {
+        if (state.progressMax <= 0 || state.progressValue >= state.progressMax) {
+            return;
+        }
+
+        int clipboardX = intField(screen, "clipboardX", screen.width / 2 - 110);
+        int clipboardY = intField(screen, "clipboardY", screen.height / 2 - 100);
+        int contentWidth = intField(screen, "contentWidth", 188);
+        int x = clipboardX + 16;
+        int y = clipboardY + 192;
+        int width = contentWidth;
+        int filled = Math.max(0, Math.min(width, width * state.progressValue / state.progressMax));
+        graphics.fill(x, y, x + width, y + 3, 0x55333333);
+        graphics.fill(x, y, x + filled, y + 3, 0xFF5D8C3A);
+    }
+
     private static void refresh(Screen screen, ManifestState state) {
-        state.counts.clear();
         try {
-            for (Object material : REFLECTION.allMaterials(REFLECTION.manifestStack(screen))) {
-                String itemId = REFLECTION.materialItemId(material);
-                state.counts.put(itemId, countPlayerItems(itemId));
+            ItemStack manifestStack = REFLECTION.manifestStack(screen);
+            if (!manifestStack.hasTag() || manifestStack.getTag() == null || !manifestStack.getTag().contains("BuildBoxPos")) {
+                return;
             }
+
+            List<String> itemIds = new ArrayList<>();
+            for (Object material : REFLECTION.allMaterials(REFLECTION.manifestStack(screen))) {
+                itemIds.add(REFLECTION.materialItemId(material));
+            }
+
+            state.requestId = nextRequestId++;
+            long sourcePos = manifestStack.getTag().getLong("BuildBoxPos");
+            String sourceType = manifestStack.getTag().getString("SourceType");
+            ManifestPlusNetwork.sendToServer(new ManifestStockRequestPacket(state.requestId, sourcePos, sourceType, itemIds));
         } catch (ReflectiveOperationException ignored) {
             // Keep the last visible screen usable even if the external mod changes internals.
         }
     }
 
+    public static void handleStockResponse(long requestId, Map<String, Integer> counts) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (!(minecraft.screen instanceof Screen screen) || !isManifestScreen(screen)) {
+            return;
+        }
+
+        ManifestState state = state(screen);
+        if (state.requestId != requestId) {
+            return;
+        }
+
+        state.counts.clear();
+        state.counts.putAll(counts);
+        state.progressValue = 0;
+        state.progressMax = 0;
+        applyFilter(screen, state);
+    }
+
+    public static void handleStockProgress(long requestId, int progressValue, int progressMax) {
+        Minecraft minecraft = Minecraft.getInstance();
+        if (!(minecraft.screen instanceof Screen screen) || !isManifestScreen(screen)) {
+            return;
+        }
+
+        ManifestState state = state(screen);
+        if (state.requestId != requestId) {
+            return;
+        }
+
+        state.progressValue = Math.max(0, progressValue);
+        state.progressMax = Math.max(0, progressMax);
+    }
+
     private static void applyFilter(Screen screen, ManifestState state) {
         try {
-            Object manifestStack = REFLECTION.manifestStack(screen);
+            ItemStack manifestStack = REFLECTION.manifestStack(screen);
             List<?> allMaterials = REFLECTION.allMaterials(manifestStack);
             if (!state.showMissingOnly) {
                 REFLECTION.setMaterials(screen, allMaterials);
@@ -185,43 +242,8 @@ public final class ManifestScreenHandler {
     private static boolean isMissing(Object material, ManifestState state) throws ReflectiveOperationException {
         String itemId = REFLECTION.materialItemId(material);
         int required = REFLECTION.materialCount(material);
-        int existing = state.counts.getOrDefault(itemId, countPlayerItems(itemId));
+        int existing = state.counts.getOrDefault(itemId, 0);
         return existing < required;
-    }
-
-    private static int countPlayerItems(String itemId) {
-        LocalPlayer player = Minecraft.getInstance().player;
-        if (player == null) {
-            return 0;
-        }
-
-        ResourceLocation location = ResourceLocation.tryParse(itemId);
-        if (location == null) {
-            return 0;
-        }
-
-        Item item = ForgeRegistries.ITEMS.getValue(location);
-        if (item == null || item == Items.AIR) {
-            return 0;
-        }
-
-        int count = 0;
-        for (ItemStack stack : player.getInventory().items) {
-            if (stack.is(item)) {
-                count += stack.getCount();
-            }
-        }
-        for (ItemStack stack : player.getInventory().armor) {
-            if (stack.is(item)) {
-                count += stack.getCount();
-            }
-        }
-        for (ItemStack stack : player.getInventory().offhand) {
-            if (stack.is(item)) {
-                count += stack.getCount();
-            }
-        }
-        return count;
     }
 
     private static Component toggleLabel(ManifestState state) {
@@ -247,6 +269,9 @@ public final class ManifestScreenHandler {
     private static final class ManifestState {
         private final Map<String, Integer> counts = new HashMap<>();
         private boolean showMissingOnly;
+        private long requestId;
+        private int progressValue;
+        private int progressMax;
     }
 
     private static final class Reflection {
@@ -269,8 +294,8 @@ public final class ManifestScreenHandler {
         private Constructor<?> pageSliceConstructor;
         private Method pageRows;
 
-        private Object manifestStack(Screen screen) throws ReflectiveOperationException {
-            return field(screen.getClass(), "manifestStack", true).get(screen);
+        private ItemStack manifestStack(Screen screen) throws ReflectiveOperationException {
+            return (ItemStack) field(screen.getClass(), "manifestStack", true).get(screen);
         }
 
         private List<?> allMaterials(Object stack) throws ReflectiveOperationException {
