@@ -26,6 +26,12 @@ public final class ManifestScreenHandler {
     private static final String MANIFEST_ITEM = "com.xiaoliang.simukraft.item.ManifestItem";
     private static final String TABLE_ROW = "com.xiaoliang.simukraft.client.gui.ManifestScreen$TableRow";
     private static final String PAGE_SLICE = "com.xiaoliang.simukraft.client.gui.ManifestScreen$PageSlice";
+    private static final int CLIPBOARD_WIDTH = 200;
+    private static final int CLIPBOARD_HEIGHT = 240;
+    private static final int CLIP_TOP_HEIGHT = 24;
+    private static final int CLIP_BOTTOM_HEIGHT = 16;
+    private static final int CLIP_SIDE_WIDTH = 12;
+    private static final int PAPER_COLOR = 0xFFF5F0E1;
 
     private static final WeakHashMap<Screen, ManifestState> STATES = new WeakHashMap<>();
     private static final Reflection REFLECTION = new Reflection();
@@ -50,8 +56,9 @@ public final class ManifestScreenHandler {
 
         int clipboardX = intField(screen, "clipboardX", screen.width / 2 - 110);
         int clipboardY = intField(screen, "clipboardY", screen.height / 2 - 100);
-        int contentX = intField(screen, "contentX", clipboardX + 16);
-        int contentWidth = intField(screen, "contentWidth", 188);
+        int paperX = clipboardX + CLIP_SIDE_WIDTH;
+        int paperW = CLIPBOARD_WIDTH - CLIP_SIDE_WIDTH * 2;
+        int nextPageRight = paperX + paperW - 4;
 
         Button refreshButton = Button.builder(Component.literal("刷新"), button -> {
             refresh(screen, state);
@@ -62,7 +69,7 @@ public final class ManifestScreenHandler {
             state.showMissingOnly = !state.showMissingOnly;
             button.setMessage(toggleLabel(state));
             applyFilter(screen, state);
-        }).bounds(contentX + contentWidth - 58, clipboardY + 8, 58, 18).build();
+        }).bounds(nextPageRight - 58, clipboardY + 8, 58, 18).build();
 
         event.addListener(refreshButton);
         event.addListener(toggleButton);
@@ -109,7 +116,10 @@ public final class ManifestScreenHandler {
                 int y = contentY + i * 24 + 8;
                 int width = Minecraft.getInstance().font.width(text);
                 int x = contentX + contentWidth - width;
-                graphics.drawString(Minecraft.getInstance().font, text, x, y, 0xFF333333, false);
+                int originalWidth = Minecraft.getInstance().font.width("x" + required);
+                int clearX = contentX + contentWidth - Math.max(width, originalWidth) - 2;
+                graphics.fill(clearX, y - 1, contentX + contentWidth + 1, y + 10, PAPER_COLOR);
+                graphics.drawString(Minecraft.getInstance().font, text, x, y, existing >= required ? 0xFF2E7D32 : 0xFF333333, false);
             }
         } catch (ReflectiveOperationException ignored) {
             // The patch is intentionally best-effort against the external mod's private UI.
@@ -123,10 +133,9 @@ public final class ManifestScreenHandler {
 
         int clipboardX = intField(screen, "clipboardX", screen.width / 2 - 110);
         int clipboardY = intField(screen, "clipboardY", screen.height / 2 - 100);
-        int contentWidth = intField(screen, "contentWidth", 188);
-        int x = clipboardX + 16;
-        int y = clipboardY + 192;
-        int width = contentWidth;
+        int x = clipboardX + CLIP_SIDE_WIDTH;
+        int y = clipboardY + CLIPBOARD_HEIGHT - 8;
+        int width = CLIPBOARD_WIDTH - CLIP_SIDE_WIDTH * 2;
         int filled = Math.max(0, Math.min(width, width * state.progressValue / state.progressMax));
         graphics.fill(x, y, x + width, y + 3, 0x55333333);
         graphics.fill(x, y, x + filled, y + 3, 0xFF5D8C3A);
