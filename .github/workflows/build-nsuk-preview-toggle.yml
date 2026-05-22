@@ -45,11 +45,12 @@ jobs:
             echo "jar_filename must be a plain .jar file name without path separators" >&2
             exit 1
           fi
-          mod_version="$(printf '%s' "$jar_filename" | sed -n 's/.*-forge-\(.*\)\.jar$/\1/p')"
+          mod_version="$(printf '%s' "$jar_filename" | sed -n 's/^.*-forge-\([0-9][0-9A-Za-z._+]*\)-1\.0\.5b3-fix\.jar$/\1/p')"
           if [[ -z "$mod_version" ]]; then
-            echo "Cannot infer mod version from jar_filename: $jar_filename" >&2
+            echo "Cannot infer mod version from NSUK jar_filename: $jar_filename" >&2
             exit 1
           fi
+          echo "Using mod_version=$mod_version from jar_filename=$jar_filename"
           sed -i "s/^mod_version=.*/mod_version=$mod_version/" gradle.properties
           printf '%s\n' "$jar_filename" > ../release-jar-name.txt
       - run: chmod +x ./gradlew

@@ -48,6 +48,7 @@ jobs:
             echo "Cannot infer mod version from jar_filename: $jar_filename" >&2
             exit 1
           fi
+          echo "Using mod_version=$mod_version from jar_filename=$jar_filename"
           sed -i "s/^mod_version=.*/mod_version=$mod_version/" gradle.properties
           printf '%s\n' "$jar_filename" > ../release-jar-name.txt
       - run: chmod +x ./gradlew
