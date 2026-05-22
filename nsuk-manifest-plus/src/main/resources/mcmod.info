@@ -1,0 +1,10 @@
+[
+  {
+    "modid": "nsukmanifestplus",
+    "name": "NSUK 更好的清单补丁",
+    "description": "增强 New Sim-U-Kraft 清单界面，显示材料库存、缺少过滤和刷新进度。",
+    "version": "1.0.0",
+    "authorList": ["MSKB"],
+    "logoFile": "icon.png"
+  }
+]

@@ -1,0 +1,10 @@
+[
+  {
+    "modid": "nsukpreviewtoggle",
+    "name": "NSUK 预览切换补丁",
+    "description": "为 New Sim-U-Kraft 大建筑预览添加范围框/详细方块预览切换。",
+    "version": "1.0.0",
+    "authorList": ["MSKB"],
+    "logoFile": "icon.png"
+  }
+]
