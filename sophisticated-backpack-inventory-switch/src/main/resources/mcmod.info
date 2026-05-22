@@ -3,7 +3,7 @@
     "modid": "sbpinventoryswitch",
     "name": "精妙背包切换补丁",
     "description": "为 Sophisticated Backpacks 添加玩家背包与精妙背包界面的快捷切换。",
-    "version": "1.0.0",
+    "version": "${mod_version}",
     "authorList": ["MSKB"],
     "logoFile": "icon.png"
   }

@@ -31,9 +31,7 @@ jobs:
           java-version: '17'
           cache: gradle
           cache-dependency-path: nsuk-manifest-plus/**/*.gradle*
-      - run: chmod +x ./gradlew
-      - run: ./gradlew build --no-daemon
-      - name: Prepare release jar
+      - name: Prepare release metadata
         shell: bash
         run: |
           set -euo pipefail
@@ -45,6 +43,20 @@ jobs:
             echo "jar_filename must be a plain .jar file name without path separators" >&2
             exit 1
           fi
+          mod_version="$(printf '%s' "$jar_filename" | sed -n 's/.*-forge-\(.*\)\.jar$/\1/p')"
+          if [[ -z "$mod_version" ]]; then
+            echo "Cannot infer mod version from jar_filename: $jar_filename" >&2
+            exit 1
+          fi
+          sed -i "s/^mod_version=.*/mod_version=$mod_version/" gradle.properties
+          printf '%s\n' "$jar_filename" > ../release-jar-name.txt
+      - run: chmod +x ./gradlew
+      - run: ./gradlew build --no-daemon
+      - name: Prepare release jar
+        shell: bash
+        run: |
+          set -euo pipefail
+          jar_filename="$(cat ../release-jar-name.txt)"
           mapfile -t jars < <(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-dev.jar' | sort)
           if [[ "${#jars[@]}" -eq 0 ]]; then
             echo "No built jar found in build/libs" >&2
