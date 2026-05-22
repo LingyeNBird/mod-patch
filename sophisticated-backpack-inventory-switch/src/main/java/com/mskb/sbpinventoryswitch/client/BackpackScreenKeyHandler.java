@@ -1,13 +1,17 @@
 package com.mskb.sbpinventoryswitch.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import com.mskb.sbpinventoryswitch.config.SBPInventorySwitchConfig;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.eventbus.api.EventPriority;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -28,14 +32,20 @@ public final class BackpackScreenKeyHandler {
     }
 
     public static void register() {
-        MinecraftForge.EVENT_BUS.addListener(BackpackScreenKeyHandler::onScreenKeyPressed);
+        MinecraftForge.EVENT_BUS.addListener(EventPriority.LOWEST, BackpackScreenKeyHandler::onScreenKeyPressed);
     }
 
-    private static void onScreenKeyPressed(ScreenEvent.KeyPressed.Pre event) {
+    private static void onScreenKeyPressed(ScreenEvent.KeyPressed.Post event) {
         Screen screen = event.getScreen();
         Minecraft minecraft = Minecraft.getInstance();
         LocalPlayer player = minecraft.player;
         if (player == null) {
+            return;
+        }
+        if (!SBPInventorySwitchConfig.isEnabled()) {
+            return;
+        }
+        if (isTextInputFocused(screen)) {
             return;
         }
 
@@ -51,6 +61,17 @@ public final class BackpackScreenKeyHandler {
             player.closeContainer();
             minecraft.setScreen(new InventoryScreen(player));
         }
+    }
+
+    private static boolean isTextInputFocused(Screen screen) {
+        GuiEventListener focused = screen.getFocused();
+        if (focused == null) {
+            return false;
+        }
+        if (focused instanceof EditBox editBox) {
+            return editBox.isFocused();
+        }
+        return false;
     }
 
     private static boolean matchesBackpackOpenKey(int keyCode, int scanCode) {

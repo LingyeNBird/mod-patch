@@ -1,6 +1,8 @@
 package com.mskb.sbpinventoryswitch;
 
 import com.mskb.sbpinventoryswitch.client.BackpackScreenKeyHandler;
+import com.mskb.sbpinventoryswitch.client.SBPInventorySwitchConfigScreen;
+import com.mskb.sbpinventoryswitch.config.SBPInventorySwitchConfig;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.fml.DistExecutor;
 import net.minecraftforge.fml.common.Mod;
@@ -10,6 +12,10 @@ public final class SBPInventorySwitchPatch {
     public static final String MOD_ID = "sbpinventoryswitch";
 
     public SBPInventorySwitchPatch() {
-        DistExecutor.safeRunWhenOn(Dist.CLIENT, () -> BackpackScreenKeyHandler::register);
+        SBPInventorySwitchConfig.load();
+        DistExecutor.safeRunWhenOn(Dist.CLIENT, () -> () -> {
+            SBPInventorySwitchConfigScreen.registerFactory();
+            BackpackScreenKeyHandler.register();
+        });
     }
 }
