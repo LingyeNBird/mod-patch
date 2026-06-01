@@ -192,11 +192,11 @@ public final class FarmSelectionClientHandler {
             return true;
         }
         if (inside(mouseX, mouseY, left, 120, 126, 20)) {
-            changeStyle(Screen.hasShiftDown() ? -1 : 1);
+            changeStyle(1);
             return true;
         }
         if (inside(mouseX, mouseY, left, 144, 126, 20)) {
-            changeMaterial(Screen.hasShiftDown() ? -1 : 1);
+            changeMaterial(1);
             return true;
         }
         if (inside(mouseX, mouseY, left, 168, 126, 20)) {
