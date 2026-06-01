@@ -9,19 +9,25 @@ import com.mskb.nsukbeautifulfarm.common.FarmDecorationConfig;
 import com.mskb.nsukbeautifulfarm.network.BeautifulFarmNetwork;
 import com.mskb.nsukbeautifulfarm.network.SaveFarmDecorationPacket;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
+import net.minecraftforge.client.event.InputEvent;
 import net.minecraftforge.client.event.RenderLevelStageEvent;
 import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
+import org.joml.Matrix4f;
+import org.joml.Vector3f;
+import org.lwjgl.glfw.GLFW;
 
 import java.lang.reflect.Method;
 import java.util.List;
@@ -38,9 +44,9 @@ public final class FarmSelectionClientHandler {
     private static Class<?> areaSelectionManagerClass;
     private static Method getPoint1;
     private static Method getPoint2;
-    private static Method setPoint1;
-    private static Method setPoint2;
     private static Method getMode;
+    private static boolean physicalUiActive;
+    private static PhysicalUi physicalUi;
 
     private FarmSelectionClientHandler() {
     }
@@ -52,7 +58,7 @@ public final class FarmSelectionClientHandler {
         }
         int key = event.getKeyCode();
         if (BeautifulFarmClient.detachMouse.matches(key, event.getScanCode())) {
-            openMouseOverlay(event.getScreen());
+            togglePhysicalUi();
             event.setCanceled(true);
         } else if (BeautifulFarmClient.nextOption.matches(key, event.getScanCode())) {
             nextOption();
@@ -81,6 +87,19 @@ public final class FarmSelectionClientHandler {
     }
 
     @SubscribeEvent
+    public static void onMouseButton(InputEvent.MouseButton.Pre event) {
+        Minecraft mc = Minecraft.getInstance();
+        if (!physicalUiActive || mc.screen == null || !isFarmSelectionScreen(mc.screen) || event.getButton() != GLFW.GLFW_MOUSE_BUTTON_LEFT || event.getAction() != GLFW.GLFW_PRESS) {
+            return;
+        }
+        PhysicalButton hovered = hoveredPhysicalButton(mc);
+        if (hovered != null) {
+            activate(hovered.action);
+            event.setCanceled(true);
+        }
+    }
+
+    @SubscribeEvent
     public static void onMouseScroll(ScreenEvent.MouseScrolled.Pre event) {
         if (!isFarmSelectionScreen(event.getScreen())) {
             return;
@@ -98,9 +117,16 @@ public final class FarmSelectionClientHandler {
     @SubscribeEvent
     public static void onRender(ScreenEvent.Render.Post event) {
         if (!isFarmSelectionScreen(event.getScreen())) {
+            physicalUiActive = false;
+            physicalUi = null;
             return;
         }
-        drawUi(event.getGuiGraphics(), event.getScreen());
+        if (!physicalUiActive) {
+            drawUi(event.getGuiGraphics(), event.getScreen());
+        } else {
+            Minecraft mc = Minecraft.getInstance();
+            event.getGuiGraphics().drawString(mc.font, "Alt: 恢复屏幕UI", 8, 8, 0xFFFF55, true);
+        }
     }
 
     @SubscribeEvent
@@ -109,13 +135,10 @@ public final class FarmSelectionClientHandler {
             return;
         }
         Minecraft mc = Minecraft.getInstance();
-        if (mc.screen == null || mc.level == null || !isFarmContextScreen(mc.screen)) {
+        if (mc.screen == null || mc.level == null || !isFarmSelectionScreen(mc.screen)) {
             return;
         }
         List<DecorationBlockPlan> plans = currentPlans();
-        if (plans.isEmpty()) {
-            return;
-        }
         double camX = mc.gameRenderer.getMainCamera().getPosition().x();
         double camY = mc.gameRenderer.getMainCamera().getPosition().y();
         double camZ = mc.gameRenderer.getMainCamera().getPosition().z();
@@ -129,6 +152,9 @@ public final class FarmSelectionClientHandler {
             renderPreviewBlock(mc, event, buffer, pos, WATER_MASK, camX, camY, camZ);
         }
         buffer.endBatch();
+        if (physicalUiActive) {
+            renderPhysicalUi(mc, event, camX, camY, camZ);
+        }
     }
 
     private static void drawUi(GuiGraphics gui, Screen screen) {
@@ -145,7 +171,7 @@ public final class FarmSelectionClientHandler {
         gui.drawString(mc.font, "↑ / ↓: 切换材质", left, helpY + 38, 0xDDDDDD, true);
         gui.drawString(mc.font, "R: 旋转朝向", left, helpY + 50, 0xDDDDDD, true);
         gui.drawString(mc.font, "滚轮: 移动水装饰", left, helpY + 62, 0xDDDDDD, true);
-        gui.drawString(mc.font, "Alt: " + (screen instanceof FarmControlsOverlay ? "恢复视角" : "脱离鼠标"), left, helpY + 74, screen instanceof FarmControlsOverlay ? 0xFFFF55 : 0xDDDDDD, true);
+        gui.drawString(mc.font, "Alt: 脱离鼠标", left, helpY + 74, 0xDDDDDD, true);
 
         int right = screen.width - 132;
         int y = 38;
@@ -194,9 +220,25 @@ public final class FarmSelectionClientHandler {
         return mouseX >= x && mouseX < x + width && mouseY >= y && mouseY < y + height;
     }
 
-    private static void openMouseOverlay(Screen parent) {
+    private static void togglePhysicalUi() {
+        if (physicalUiActive) {
+            physicalUiActive = false;
+            physicalUi = null;
+            return;
+        }
         Minecraft mc = Minecraft.getInstance();
-        mc.setScreen(new FarmControlsOverlay(parent, point(1), point(2)));
+        if (mc.level == null) {
+            return;
+        }
+        Vec3 cam = mc.gameRenderer.getMainCamera().getPosition();
+        Vector3f lookVector = mc.gameRenderer.getMainCamera().getLookVector();
+        Vector3f leftVector = mc.gameRenderer.getMainCamera().getLeftVector();
+        Vector3f upVector = mc.gameRenderer.getMainCamera().getUpVector();
+        Vec3 normal = new Vec3(lookVector.x(), lookVector.y(), lookVector.z()).normalize();
+        Vec3 right = new Vec3(-leftVector.x(), -leftVector.y(), -leftVector.z()).normalize();
+        Vec3 up = new Vec3(upVector.x(), upVector.y(), upVector.z()).normalize();
+        physicalUi = new PhysicalUi(cam.add(normal.scale(3.0D)), normal, right, up);
+        physicalUiActive = true;
     }
 
     private static void renderPreviewBlock(Minecraft mc, RenderLevelStageEvent event, MultiBufferSource.BufferSource buffer,
@@ -205,6 +247,80 @@ public final class FarmSelectionClientHandler {
         event.getPoseStack().translate(pos.getX() - camX, pos.getY() - camY, pos.getZ() - camZ);
         mc.getBlockRenderer().renderSingleBlock(state, event.getPoseStack(), buffer, 15728880, OverlayTexture.NO_OVERLAY);
         event.getPoseStack().popPose();
+    }
+
+    private static void renderPhysicalUi(Minecraft mc, RenderLevelStageEvent event, double camX, double camY, double camZ) {
+        if (physicalUi == null) {
+            return;
+        }
+        PhysicalButton hovered = hoveredPhysicalButton(mc);
+        MultiBufferSource.BufferSource buffer = MultiBufferSource.immediate(Tesselator.getInstance().getBuilder());
+        for (PhysicalButton button : physicalButtons()) {
+            String label = (hovered == button ? "> " : "[ ") + button.label() + (hovered == button ? " <" : " ]");
+            int color = hovered == button ? 0xFFFF55 : 0xFFFFFF;
+            renderWorldLabel(mc, event, buffer, physicalUi.point(button.x, button.y), label, color, camX, camY, camZ);
+        }
+        buffer.endBatch();
+    }
+
+    private static void renderWorldLabel(Minecraft mc, RenderLevelStageEvent event, MultiBufferSource.BufferSource buffer,
+                                         Vec3 pos, String text, int color, double camX, double camY, double camZ) {
+        event.getPoseStack().pushPose();
+        event.getPoseStack().translate(pos.x - camX, pos.y - camY, pos.z - camZ);
+        event.getPoseStack().mulPose(mc.gameRenderer.getMainCamera().rotation());
+        event.getPoseStack().scale(-0.025F, -0.025F, 0.025F);
+        Matrix4f matrix = event.getPoseStack().last().pose();
+        float x = -mc.font.width(text) / 2.0F;
+        mc.font.drawInBatch(text, x, 0.0F, color, false, matrix, buffer, Font.DisplayMode.SEE_THROUGH, 0x66000000, LightTexture.FULL_BRIGHT);
+        event.getPoseStack().popPose();
+    }
+
+    private static PhysicalButton hoveredPhysicalButton(Minecraft mc) {
+        if (physicalUi == null) {
+            return null;
+        }
+        Vec3 cam = mc.gameRenderer.getMainCamera().getPosition();
+        Vector3f lookVector = mc.gameRenderer.getMainCamera().getLookVector();
+        Vec3 ray = new Vec3(lookVector.x(), lookVector.y(), lookVector.z()).normalize();
+        double denominator = ray.dot(physicalUi.normal);
+        if (Math.abs(denominator) < 1.0E-5D) {
+            return null;
+        }
+        double t = physicalUi.origin.subtract(cam).dot(physicalUi.normal) / denominator;
+        if (t < 0.0D || t > 8.0D) {
+            return null;
+        }
+        Vec3 hit = cam.add(ray.scale(t)).subtract(physicalUi.origin);
+        double x = hit.dot(physicalUi.right);
+        double y = hit.dot(physicalUi.up);
+        for (PhysicalButton button : physicalButtons()) {
+            if (x >= button.x - button.w / 2.0D && x <= button.x + button.w / 2.0D && y >= button.y - button.h / 2.0D && y <= button.y + button.h / 2.0D) {
+                return button;
+            }
+        }
+        return null;
+    }
+
+    private static List<PhysicalButton> physicalButtons() {
+        return List.of(
+                new PhysicalButton(PhysicalAction.STYLE, -1.05D, 0.55D, 1.5D, 0.28D),
+                new PhysicalButton(PhysicalAction.MATERIAL, -1.05D, 0.20D, 1.5D, 0.28D),
+                new PhysicalButton(PhysicalAction.FACING, -1.05D, -0.15D, 1.5D, 0.28D),
+                new PhysicalButton(PhysicalAction.BORDER, 0.85D, 0.55D, 1.3D, 0.28D),
+                new PhysicalButton(PhysicalAction.WATER, 0.85D, 0.20D, 1.3D, 0.28D),
+                new PhysicalButton(PhysicalAction.COVER, 0.85D, -0.15D, 1.3D, 0.28D)
+        );
+    }
+
+    private static void activate(PhysicalAction action) {
+        switch (action) {
+            case STYLE -> changeStyle(1);
+            case MATERIAL -> changeMaterial(1);
+            case FACING -> rotate();
+            case BORDER -> selectedOption = DecorationOption.BORDER;
+            case WATER -> selectedOption = DecorationOption.WATER;
+            case COVER -> selectedOption = DecorationOption.WATER_COVER;
+        }
     }
 
     private static List<DecorationBlockPlan> currentPlans() {
@@ -242,10 +358,6 @@ public final class FarmSelectionClientHandler {
         } catch (ReflectiveOperationException | LinkageError ignored) {
             return false;
         }
-    }
-
-    private static boolean isFarmContextScreen(Screen screen) {
-        return isFarmSelectionScreen(screen) || screen instanceof FarmControlsOverlay;
     }
 
     private static boolean hasBothPoints() {
@@ -435,78 +547,37 @@ public final class FarmSelectionClientHandler {
         return getPoint2;
     }
 
-    private static Method setPoint1Method() throws ReflectiveOperationException {
-        if (setPoint1 == null) setPoint1 = managerClass().getMethod("setPoint1", BlockPos.class);
-        return setPoint1;
-    }
-
-    private static Method setPoint2Method() throws ReflectiveOperationException {
-        if (setPoint2 == null) setPoint2 = managerClass().getMethod("setPoint2", BlockPos.class);
-        return setPoint2;
-    }
-
     private static Method getModeMethod() throws ReflectiveOperationException {
         if (getMode == null) getMode = managerClass().getMethod("getMode");
         return getMode;
     }
 
-    private static final class FarmControlsOverlay extends Screen {
-        private final Screen parent;
-        private final BlockPos point1;
-        private final BlockPos point2;
-
-        private FarmControlsOverlay(Screen parent, BlockPos point1, BlockPos point2) {
-            super(Component.empty());
-            this.parent = parent;
-            this.point1 = point1;
-            this.point2 = point2;
+    private record PhysicalUi(Vec3 origin, Vec3 normal, Vec3 right, Vec3 up) {
+        Vec3 point(double x, double y) {
+            return origin.add(right.scale(x)).add(up.scale(y));
         }
+    }
 
-        @Override
-        public void render(GuiGraphics gui, int mouseX, int mouseY, float partialTick) {
-            drawUi(gui, this);
+    private record PhysicalButton(PhysicalAction action, double x, double y, double w, double h) {
+        String label() {
+            return switch (action) {
+                case STYLE -> "样式: " + styleName();
+                case MATERIAL -> "材质: " + materialName();
+                case FACING -> "朝向: " + facingName();
+                case BORDER -> DecorationOption.BORDER.displayName();
+                case WATER -> DecorationOption.WATER.displayName();
+                case COVER -> DecorationOption.WATER_COVER.displayName();
+            };
         }
+    }
 
-        @Override
-        public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-            if (BeautifulFarmClient.detachMouse.matches(keyCode, scanCode)) {
-                restoreParent();
-                return true;
-            }
-            return super.keyPressed(keyCode, scanCode, modifiers);
-        }
-
-        @Override
-        public boolean mouseClicked(double mouseX, double mouseY, int button) {
-            return clickUi(mouseX, mouseY, this) || super.mouseClicked(mouseX, mouseY, button);
-        }
-
-        @Override
-        public boolean mouseScrolled(double mouseX, double mouseY, double delta) {
-            if (selectedOption == DecorationOption.WATER && config.waterStyle != FarmDecorationConfig.WaterStyle.NONE) {
-                Direction facing = Minecraft.getInstance().player == null ? Direction.NORTH : Minecraft.getInstance().player.getDirection();
-                int step = delta > 0 ? 1 : -1;
-                config.waterOffsetX += facing.getStepX() * step;
-                config.waterOffsetZ += facing.getStepZ() * step;
-                return true;
-            }
-            return super.mouseScrolled(mouseX, mouseY, delta);
-        }
-
-        @Override
-        public boolean isPauseScreen() {
-            return false;
-        }
-
-        private void restoreParent() {
-            Minecraft mc = Minecraft.getInstance();
-            mc.setScreen(parent);
-            try {
-                if (point1 != null) setPoint1Method().invoke(null, point1);
-                if (point2 != null) setPoint2Method().invoke(null, point2);
-            } catch (ReflectiveOperationException | LinkageError ignored) {
-            }
-        }
+    private enum PhysicalAction {
+        STYLE,
+        MATERIAL,
+        FACING,
+        BORDER,
+        WATER,
+        COVER
     }
 
 }
