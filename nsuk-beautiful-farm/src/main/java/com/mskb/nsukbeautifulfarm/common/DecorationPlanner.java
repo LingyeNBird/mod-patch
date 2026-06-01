@@ -30,6 +30,12 @@ public final class DecorationPlanner {
         return blocks.entrySet().stream().map(e -> new DecorationBlockPlan(e.getKey(), e.getValue())).toList();
     }
 
+    public static List<BlockPos> waterPositions(BlockPos min, BlockPos max, FarmDecorationConfig config) {
+        Map<BlockPos, BlockState> blocks = new LinkedHashMap<>();
+        addWater(blocks, min, max, config);
+        return List.copyOf(blocks.keySet());
+    }
+
     private static void addBorder(Map<BlockPos, BlockState> blocks, BlockPos min, BlockPos max, FarmDecorationConfig config) {
         if (config.borderStyle == FarmDecorationConfig.BorderStyle.NONE) {
             return;

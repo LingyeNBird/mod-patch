@@ -16,6 +16,8 @@ import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraftforge.client.event.RenderLevelStageEvent;
 import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -26,6 +28,8 @@ import java.util.List;
 public final class FarmSelectionClientHandler {
     private static final String AREA_SELECTION_SCREEN = "com.xiaoliang.simukraft.client.gui.AreaSelectionScreen";
     private static final String FARMLAND_MODE = "FARMLAND";
+    private static final ResourceLocation WIDGETS = new ResourceLocation("textures/gui/widgets.png");
+    private static final BlockState WATER_MASK = Blocks.BLUE_STAINED_GLASS.defaultBlockState();
 
     private static DecorationOption selectedOption = DecorationOption.BORDER;
     private static final FarmDecorationConfig config = new FarmDecorationConfig();
@@ -112,26 +116,49 @@ public final class FarmSelectionClientHandler {
         double camZ = mc.gameRenderer.getMainCamera().getPosition().z();
         MultiBufferSource.BufferSource buffer = MultiBufferSource.immediate(Tesselator.getInstance().getBuilder());
         for (DecorationBlockPlan plan : plans) {
-            event.getPoseStack().pushPose();
-            event.getPoseStack().translate(plan.pos().getX() - camX, plan.pos().getY() - camY, plan.pos().getZ() - camZ);
-            mc.getBlockRenderer().renderSingleBlock(plan.state(), event.getPoseStack(), buffer, 15728880, OverlayTexture.NO_OVERLAY);
-            event.getPoseStack().popPose();
+            if (!plan.state().is(Blocks.WATER)) {
+                renderPreviewBlock(mc, event, buffer, plan.pos(), plan.state(), camX, camY, camZ);
+            }
+        }
+        for (BlockPos pos : currentWaterPositions()) {
+            renderPreviewBlock(mc, event, buffer, pos, WATER_MASK, camX, camY, camZ);
         }
         buffer.endBatch();
     }
 
     private static void drawUi(GuiGraphics gui, Screen screen) {
         Minecraft mc = Minecraft.getInstance();
-        int right = screen.width - 120;
+        int left = 8;
+        gui.drawString(mc.font, "美丽农田", left, 72, 0x55FF55, true);
+        gui.drawString(mc.font, "装饰: " + selectedOption.displayName(), left, 86, 0xFFFFFF, true);
+        gui.drawString(mc.font, "样式: " + styleName(), left, 98, 0xFFFFAA, true);
+        gui.drawString(mc.font, "材质/朝向: " + materialName() + " / " + facingName(), left, 110, 0xAAAAFF, true);
+
+        int helpY = screen.height / 2 - 36;
+        gui.drawString(mc.font, "美丽农田操作", left, helpY, 0x55FF55, true);
+        gui.drawString(mc.font, "Tab / Shift+Tab: 切换装饰", left, helpY + 14, 0xDDDDDD, true);
+        gui.drawString(mc.font, "← / →: 切换具体样式", left, helpY + 26, 0xDDDDDD, true);
+        gui.drawString(mc.font, "↑ / ↓: 切换材质", left, helpY + 38, 0xDDDDDD, true);
+        gui.drawString(mc.font, "R: 旋转朝向", left, helpY + 50, 0xDDDDDD, true);
+        gui.drawString(mc.font, "滚轮: 移动水装饰", left, helpY + 62, 0xDDDDDD, true);
+
+        int right = screen.width - 132;
         int y = 38;
-        gui.drawString(mc.font, selectedOption.displayName(), screen.width / 2 - 40, 82, 0xFFFFFF, true);
-        gui.drawString(mc.font, styleName(), screen.width / 2 - 40, 94, 0xFFFFAA, true);
-        gui.drawString(mc.font, materialName() + " / " + facingName(), screen.width / 2 - 40, 106, 0xAAAAFF, true);
         for (DecorationOption option : DecorationOption.values()) {
-            int color = option == selectedOption ? 0x55FF55 : 0xDDDDDD;
-            gui.drawString(mc.font, option.displayName(), right, y, color, true);
-            y += 14;
+            boolean selected = option == selectedOption;
+            gui.blit(WIDGETS, right, y, 0, selected ? 86 : 46, 120, 20);
+            int color = selected ? 0xFFFF55 : 0xFFFFFF;
+            gui.drawCenteredString(mc.font, option.displayName(), right + 60, y + 6, color);
+            y += 24;
         }
+    }
+
+    private static void renderPreviewBlock(Minecraft mc, RenderLevelStageEvent event, MultiBufferSource.BufferSource buffer,
+                                           BlockPos pos, BlockState state, double camX, double camY, double camZ) {
+        event.getPoseStack().pushPose();
+        event.getPoseStack().translate(pos.getX() - camX, pos.getY() - camY, pos.getZ() - camZ);
+        mc.getBlockRenderer().renderSingleBlock(state, event.getPoseStack(), buffer, 15728880, OverlayTexture.NO_OVERLAY);
+        event.getPoseStack().popPose();
     }
 
     private static List<DecorationBlockPlan> currentPlans() {
@@ -143,6 +170,17 @@ public final class FarmSelectionClientHandler {
         BlockPos min = new BlockPos(Math.min(p1.getX(), p2.getX()), Math.min(p1.getY(), p2.getY()), Math.min(p1.getZ(), p2.getZ()));
         BlockPos max = new BlockPos(Math.max(p1.getX(), p2.getX()), Math.max(p1.getY(), p2.getY()), Math.max(p1.getZ(), p2.getZ()));
         return DecorationPlanner.plan(min, max, config);
+    }
+
+    private static List<BlockPos> currentWaterPositions() {
+        BlockPos p1 = point(1);
+        BlockPos p2 = point(2);
+        if (p1 == null || p2 == null) {
+            return List.of();
+        }
+        BlockPos min = new BlockPos(Math.min(p1.getX(), p2.getX()), Math.min(p1.getY(), p2.getY()), Math.min(p1.getZ(), p2.getZ()));
+        BlockPos max = new BlockPos(Math.max(p1.getX(), p2.getX()), Math.max(p1.getY(), p2.getY()), Math.max(p1.getZ(), p2.getZ()));
+        return DecorationPlanner.waterPositions(min, max, config);
     }
 
     private static boolean isFarmSelectionScreen(Screen screen) {
@@ -191,9 +229,15 @@ public final class FarmSelectionClientHandler {
 
     private static void changeStyle(int delta) {
         switch (selectedOption) {
-            case BORDER -> config.borderStyle = cycle(FarmDecorationConfig.BorderStyle.values(), config.borderStyle, delta);
+            case BORDER -> {
+                config.borderStyle = cycle(FarmDecorationConfig.BorderStyle.values(), config.borderStyle, delta);
+                config.borderMaterial = materialsForBorder()[0];
+            }
             case WATER -> config.waterStyle = cycle(FarmDecorationConfig.WaterStyle.values(), config.waterStyle, delta);
-            case WATER_COVER -> config.coverStyle = cycle(FarmDecorationConfig.CoverStyle.values(), config.coverStyle, delta);
+            case WATER_COVER -> {
+                config.coverStyle = cycle(FarmDecorationConfig.CoverStyle.values(), config.coverStyle, delta);
+                config.coverMaterial = materialsForCover()[0];
+            }
         }
     }
 
