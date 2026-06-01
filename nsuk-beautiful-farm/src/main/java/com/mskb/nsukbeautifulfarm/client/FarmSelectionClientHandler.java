@@ -51,13 +51,12 @@ public final class FarmSelectionClientHandler {
         if (!isFarmSelectionScreen(event.getScreen())) {
             return;
         }
-        boolean shift = Screen.hasShiftDown();
         int key = event.getKeyCode();
         if (BeautifulFarmClient.detachMouse.matches(key, event.getScanCode())) {
             toggleMouseDetached();
             event.setCanceled(true);
         } else if (BeautifulFarmClient.nextOption.matches(key, event.getScanCode())) {
-            if (shift) previousOption(); else nextOption();
+            nextOption();
             event.setCanceled(true);
         } else if (BeautifulFarmClient.nextStyle.matches(key, event.getScanCode())) {
             changeStyle(1);
@@ -161,7 +160,7 @@ public final class FarmSelectionClientHandler {
 
         int helpY = screen.height / 2 - 36;
         gui.drawString(mc.font, "美丽农田操作", left, helpY, 0x55FF55, true);
-        gui.drawString(mc.font, "Tab / Shift+Tab: 切换装饰", left, helpY + 14, 0xDDDDDD, true);
+        gui.drawString(mc.font, "Tab: 切换装饰", left, helpY + 14, 0xDDDDDD, true);
         gui.drawString(mc.font, "← / →: 切换具体样式", left, helpY + 26, 0xDDDDDD, true);
         gui.drawString(mc.font, "↑ / ↓: 切换材质", left, helpY + 38, 0xDDDDDD, true);
         gui.drawString(mc.font, "R: 旋转朝向", left, helpY + 50, 0xDDDDDD, true);
@@ -299,11 +298,6 @@ public final class FarmSelectionClientHandler {
     private static void nextOption() {
         DecorationOption[] values = DecorationOption.values();
         selectedOption = values[(selectedOption.ordinal() + 1) % values.length];
-    }
-
-    private static void previousOption() {
-        DecorationOption[] values = DecorationOption.values();
-        selectedOption = values[Math.floorMod(selectedOption.ordinal() - 1, values.length)];
     }
 
     private static void changeStyle(int delta) {
