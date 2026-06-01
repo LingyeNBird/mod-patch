@@ -1,0 +1,79 @@
+name: Build NSUK Beautiful Farm Patch
+
+on:
+  workflow_dispatch:
+    inputs:
+      jar_filename:
+        description: Optional release asset jar file name. Leave empty to use the automatic NSUK naming format.
+        required: false
+        default: ''
+      release_name:
+        description: GitHub Release name
+        required: true
+        default: NSUK Beautiful Farm Patch
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nsuk-beautiful-farm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+          cache-dependency-path: nsuk-beautiful-farm/**/*.gradle*
+      - name: Prepare release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          jar_filename='${{ inputs.jar_filename }}'
+          if [[ -z "$jar_filename" ]]; then
+            jar_filename='[NSUK美丽农田]nsuk-beautiful-farm-forge-0.${{ github.run_number }}-1.0.5b3-fix.jar'
+          fi
+          if [[ "$jar_filename" != *.jar || "$jar_filename" == */* || "$jar_filename" == *\\* ]]; then
+            echo "jar_filename must be a plain .jar file name without path separators" >&2
+            exit 1
+          fi
+          mod_version="$(printf '%s' "$jar_filename" | sed -n 's/^.*-forge-\([0-9][0-9A-Za-z._+]*\)-1\.0\.5b3-fix\.jar$/\1/p')"
+          if [[ -z "$mod_version" ]]; then
+            echo "Cannot infer mod version from NSUK jar_filename: $jar_filename" >&2
+            exit 1
+          fi
+          echo "Using mod_version=$mod_version from jar_filename=$jar_filename"
+          sed -i "s/^mod_version=.*/mod_version=$mod_version/" gradle.properties
+          printf '%s\n' "$jar_filename" > ../release-jar-name.txt
+      - run: chmod +x ./gradlew
+      - run: ./gradlew build --no-daemon
+      - name: Prepare release jar
+        shell: bash
+        run: |
+          set -euo pipefail
+          jar_filename="$(cat ../release-jar-name.txt)"
+          mapfile -t jars < <(find build/libs -maxdepth 1 -type f -name '*.jar' ! -name '*-sources.jar' ! -name '*-dev.jar' | sort)
+          if [[ "${#jars[@]}" -eq 0 ]]; then
+            echo "No built jar found in build/libs" >&2
+            exit 1
+          fi
+          mkdir -p ../release
+          cp "${jars[0]}" "../release/$jar_filename"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nsuk-beautiful-farm
+          path: release/*.jar
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nsuk-beautiful-farm-${{ github.run_number }}
+          name: ${{ inputs.release_name }}
+          body: |
+            Automated build of `nsuk-beautiful-farm` from `${{ github.sha }}`.
+          files: release/*.jar

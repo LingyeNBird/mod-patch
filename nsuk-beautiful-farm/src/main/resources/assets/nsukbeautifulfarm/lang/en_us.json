@@ -1,0 +1,11 @@
+{
+  "key.categories.nsukbeautifulfarm": "Beautiful Farm",
+  "key.nsukbeautifulfarm.next_option": "Switch decoration option",
+  "key.nsukbeautifulfarm.previous_style": "Previous style",
+  "key.nsukbeautifulfarm.next_style": "Next style",
+  "key.nsukbeautifulfarm.previous_material": "Previous material",
+  "key.nsukbeautifulfarm.next_material": "Next material",
+  "key.nsukbeautifulfarm.rotate": "Rotate decoration",
+  "message.nsukbeautifulfarm.saved": "Saved farm decoration settings",
+  "message.nsukbeautifulfarm.missing_material": "Beautiful Farm missing material: %s x%d"
+}
