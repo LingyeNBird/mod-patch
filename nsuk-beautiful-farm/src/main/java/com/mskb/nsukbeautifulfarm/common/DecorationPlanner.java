@@ -7,10 +7,14 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.FenceGateBlock;
+import net.minecraft.world.level.block.IronBarsBlock;
 import net.minecraft.world.level.block.SlabBlock;
 import net.minecraft.world.level.block.TrapDoorBlock;
+import net.minecraft.world.level.block.WallBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.block.state.properties.WallSide;
+import net.minecraft.world.level.block.state.properties.Half;
 import net.minecraft.world.level.block.state.properties.SlabType;
 
 import java.util.ArrayList;
@@ -65,6 +69,30 @@ public final class DecorationPlanner {
         if (!full || fence) {
             addFenceGate(blocks, min, max, config, fence);
         }
+        connectBorderBlocks(blocks, y);
+    }
+
+    private static void connectBorderBlocks(Map<BlockPos, BlockState> blocks, int y) {
+        Map<BlockPos, BlockState> connected = new LinkedHashMap<>();
+        for (Map.Entry<BlockPos, BlockState> entry : blocks.entrySet()) {
+            BlockPos pos = entry.getKey();
+            if (pos.getY() == y) {
+                connected.put(pos, connect(entry.getValue(), blocks.containsKey(pos.north()), blocks.containsKey(pos.east()), blocks.containsKey(pos.south()), blocks.containsKey(pos.west())));
+            }
+        }
+        blocks.putAll(connected);
+    }
+
+    private static BlockState connect(BlockState state, boolean north, boolean east, boolean south, boolean west) {
+        if (state.hasProperty(WallBlock.NORTH_WALL)) state = state.setValue(WallBlock.NORTH_WALL, north ? WallSide.LOW : WallSide.NONE);
+        if (state.hasProperty(WallBlock.EAST_WALL)) state = state.setValue(WallBlock.EAST_WALL, east ? WallSide.LOW : WallSide.NONE);
+        if (state.hasProperty(WallBlock.SOUTH_WALL)) state = state.setValue(WallBlock.SOUTH_WALL, south ? WallSide.LOW : WallSide.NONE);
+        if (state.hasProperty(WallBlock.WEST_WALL)) state = state.setValue(WallBlock.WEST_WALL, west ? WallSide.LOW : WallSide.NONE);
+        if (state.hasProperty(IronBarsBlock.NORTH)) state = state.setValue(IronBarsBlock.NORTH, north);
+        if (state.hasProperty(IronBarsBlock.EAST)) state = state.setValue(IronBarsBlock.EAST, east);
+        if (state.hasProperty(IronBarsBlock.SOUTH)) state = state.setValue(IronBarsBlock.SOUTH, south);
+        if (state.hasProperty(IronBarsBlock.WEST)) state = state.setValue(IronBarsBlock.WEST, west);
+        return state;
     }
 
     private static void addFenceGate(Map<BlockPos, BlockState> blocks, BlockPos min, BlockPos max, FarmDecorationConfig config, boolean fence) {
@@ -168,7 +196,11 @@ public final class DecorationPlanner {
             return state.setValue(SlabBlock.TYPE, SlabType.BOTTOM);
         }
         if (config.coverStyle == FarmDecorationConfig.CoverStyle.TRAPDOOR && state.hasProperty(TrapDoorBlock.FACING)) {
-            return state.setValue(TrapDoorBlock.FACING, config.coverFacing);
+            state = state.setValue(TrapDoorBlock.FACING, config.coverFacing);
+            if (state.hasProperty(TrapDoorBlock.HALF)) {
+                state = state.setValue(TrapDoorBlock.HALF, Half.TOP);
+            }
+            return state;
         }
         return state;
     }

@@ -18,9 +18,11 @@ import net.minecraft.core.Direction;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraftforge.client.event.InputEvent;
 import net.minecraftforge.client.event.RenderLevelStageEvent;
 import net.minecraftforge.client.event.ScreenEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
+import org.lwjgl.glfw.GLFW;
 
 import java.lang.reflect.Method;
 import java.util.List;
@@ -38,6 +40,8 @@ public final class FarmSelectionClientHandler {
     private static Method getPoint1;
     private static Method getPoint2;
     private static Method getMode;
+    private static boolean mouseDetached;
+    private static boolean wasFarmSelectionScreen;
 
     private FarmSelectionClientHandler() {
     }
@@ -49,7 +53,10 @@ public final class FarmSelectionClientHandler {
         }
         boolean shift = Screen.hasShiftDown();
         int key = event.getKeyCode();
-        if (BeautifulFarmClient.nextOption.matches(key, event.getScanCode())) {
+        if (BeautifulFarmClient.detachMouse.matches(key, event.getScanCode())) {
+            toggleMouseDetached();
+            event.setCanceled(true);
+        } else if (BeautifulFarmClient.nextOption.matches(key, event.getScanCode())) {
             if (shift) previousOption(); else nextOption();
             event.setCanceled(true);
         } else if (BeautifulFarmClient.nextStyle.matches(key, event.getScanCode())) {
@@ -76,6 +83,18 @@ public final class FarmSelectionClientHandler {
     }
 
     @SubscribeEvent
+    public static void onMouseButton(InputEvent.MouseButton.Pre event) {
+        Minecraft mc = Minecraft.getInstance();
+        if (!mouseDetached || mc.screen == null || !isFarmSelectionScreen(mc.screen) || event.getButton() != GLFW.GLFW_MOUSE_BUTTON_LEFT || event.getAction() != GLFW.GLFW_PRESS) {
+            return;
+        }
+        double mouseX = mc.mouseHandler.xpos() * mc.getWindow().getGuiScaledWidth() / mc.getWindow().getScreenWidth();
+        double mouseY = mc.mouseHandler.ypos() * mc.getWindow().getGuiScaledHeight() / mc.getWindow().getScreenHeight();
+        clickUi(mouseX, mouseY, mc.screen);
+        event.setCanceled(true);
+    }
+
+    @SubscribeEvent
     public static void onMouseScroll(ScreenEvent.MouseScrolled.Pre event) {
         if (!isFarmSelectionScreen(event.getScreen())) {
             return;
@@ -93,8 +112,13 @@ public final class FarmSelectionClientHandler {
     @SubscribeEvent
     public static void onRender(ScreenEvent.Render.Post event) {
         if (!isFarmSelectionScreen(event.getScreen())) {
+            if (wasFarmSelectionScreen) {
+                mouseDetached = false;
+                wasFarmSelectionScreen = false;
+            }
             return;
         }
+        wasFarmSelectionScreen = true;
         drawUi(event.getGuiGraphics(), event.getScreen());
     }
 
@@ -129,10 +153,11 @@ public final class FarmSelectionClientHandler {
     private static void drawUi(GuiGraphics gui, Screen screen) {
         Minecraft mc = Minecraft.getInstance();
         int left = 8;
-        gui.drawString(mc.font, "美丽农田", left, 72, 0x55FF55, true);
-        gui.drawString(mc.font, "装饰: " + selectedOption.displayName(), left, 86, 0xFFFFFF, true);
-        gui.drawString(mc.font, "样式: " + styleName(), left, 98, 0xFFFFAA, true);
-        gui.drawString(mc.font, "材质/朝向: " + materialName() + " / " + facingName(), left, 110, 0xAAAAFF, true);
+        drawButton(gui, left, 72, 126, "美丽农田", true);
+        drawButton(gui, left, 96, 126, "装饰: " + selectedOption.displayName(), true);
+        drawButton(gui, left, 120, 126, "样式: " + styleName(), true);
+        drawButton(gui, left, 144, 126, "材质: " + materialName(), true);
+        drawButton(gui, left, 168, 126, "朝向: " + facingName(), true);
 
         int helpY = screen.height / 2 - 36;
         gui.drawString(mc.font, "美丽农田操作", left, helpY, 0x55FF55, true);
@@ -141,15 +166,69 @@ public final class FarmSelectionClientHandler {
         gui.drawString(mc.font, "↑ / ↓: 切换材质", left, helpY + 38, 0xDDDDDD, true);
         gui.drawString(mc.font, "R: 旋转朝向", left, helpY + 50, 0xDDDDDD, true);
         gui.drawString(mc.font, "滚轮: 移动水装饰", left, helpY + 62, 0xDDDDDD, true);
+        gui.drawString(mc.font, "Alt: " + (mouseDetached ? "恢复视角" : "脱离鼠标"), left, helpY + 74, mouseDetached ? 0xFFFF55 : 0xDDDDDD, true);
 
         int right = screen.width - 132;
         int y = 38;
         for (DecorationOption option : DecorationOption.values()) {
-            boolean selected = option == selectedOption;
-            gui.blit(WIDGETS, right, y, 0, selected ? 86 : 46, 120, 20);
-            int color = selected ? 0xFFFF55 : 0xFFFFFF;
-            gui.drawCenteredString(mc.font, option.displayName(), right + 60, y + 6, color);
+            drawButton(gui, right, y, 120, option.displayName(), option == selectedOption);
             y += 24;
+        }
+    }
+
+    private static void drawButton(GuiGraphics gui, int x, int y, int width, String text, boolean selected) {
+        Minecraft mc = Minecraft.getInstance();
+        int half = width / 2;
+        int textureY = selected ? 86 : 46;
+        gui.blit(WIDGETS, x, y, 0, textureY, half, 20);
+        gui.blit(WIDGETS, x + half, y, 200 - (width - half), textureY, width - half, 20);
+        gui.drawCenteredString(mc.font, text, x + width / 2, y + 6, selected ? 0xFFFF55 : 0xFFFFFF);
+    }
+
+    private static boolean clickUi(double mouseX, double mouseY, Screen screen) {
+        int left = 8;
+        if (inside(mouseX, mouseY, left, 96, 126, 20)) {
+            nextOption();
+            return true;
+        }
+        if (inside(mouseX, mouseY, left, 120, 126, 20)) {
+            changeStyle(Screen.hasShiftDown() ? -1 : 1);
+            return true;
+        }
+        if (inside(mouseX, mouseY, left, 144, 126, 20)) {
+            changeMaterial(Screen.hasShiftDown() ? -1 : 1);
+            return true;
+        }
+        if (inside(mouseX, mouseY, left, 168, 126, 20)) {
+            rotate();
+            return true;
+        }
+        int right = screen.width - 132;
+        int y = 38;
+        for (DecorationOption option : DecorationOption.values()) {
+            if (inside(mouseX, mouseY, right, y, 120, 20)) {
+                selectedOption = option;
+                return true;
+            }
+            y += 24;
+        }
+        return false;
+    }
+
+    private static boolean inside(double mouseX, double mouseY, int x, int y, int width, int height) {
+        return mouseX >= x && mouseX < x + width && mouseY >= y && mouseY < y + height;
+    }
+
+    private static void toggleMouseDetached() {
+        Minecraft mc = Minecraft.getInstance();
+        mouseDetached = !mouseDetached;
+        if (mc.mouseHandler == null) {
+            return;
+        }
+        if (mouseDetached) {
+            mc.mouseHandler.releaseMouse();
+        } else {
+            mc.mouseHandler.grabMouse();
         }
     }
 
@@ -292,9 +371,9 @@ public final class FarmSelectionClientHandler {
 
     private static String materialName() {
         return switch (selectedOption) {
-            case BORDER -> config.borderMaterial.getPath();
+            case BORDER -> materialDisplayName(config.borderMaterial);
             case WATER -> "无材质";
-            case WATER_COVER -> config.coverMaterial.getPath();
+            case WATER_COVER -> materialDisplayName(config.coverMaterial);
         };
     }
 
@@ -304,7 +383,72 @@ public final class FarmSelectionClientHandler {
             case WATER -> config.waterFacing;
             case WATER_COVER -> config.coverFacing;
         };
-        return direction.getName();
+        return directionDisplayName(direction);
+    }
+
+    private static String materialDisplayName(ResourceLocation id) {
+        String path = id.getPath();
+        String color = switch (path) {
+            case "white_stained_glass_pane" -> "白色";
+            case "orange_stained_glass_pane" -> "橙色";
+            case "magenta_stained_glass_pane" -> "品红色";
+            case "light_blue_stained_glass_pane" -> "淡蓝色";
+            case "yellow_stained_glass_pane" -> "黄色";
+            case "lime_stained_glass_pane" -> "黄绿色";
+            case "pink_stained_glass_pane" -> "粉红色";
+            case "gray_stained_glass_pane" -> "灰色";
+            case "light_gray_stained_glass_pane" -> "淡灰色";
+            case "cyan_stained_glass_pane" -> "青色";
+            case "purple_stained_glass_pane" -> "紫色";
+            case "blue_stained_glass_pane" -> "蓝色";
+            case "brown_stained_glass_pane" -> "棕色";
+            case "green_stained_glass_pane" -> "绿色";
+            case "red_stained_glass_pane" -> "红色";
+            case "black_stained_glass_pane" -> "黑色";
+            default -> null;
+        };
+        if (color != null) return color + "染色玻璃板";
+        String base = path;
+        String suffix = "";
+        if (base.endsWith("_fence_gate")) { suffix = "栅栏门"; base = base.substring(0, base.length() - 11); }
+        else if (base.endsWith("_fence")) { suffix = "栅栏"; base = base.substring(0, base.length() - 6); }
+        else if (base.endsWith("_wall")) { suffix = "墙"; base = base.substring(0, base.length() - 5); }
+        else if (base.endsWith("_pane")) { suffix = "玻璃板"; base = base.substring(0, base.length() - 5); }
+        else if (base.endsWith("_leaves")) { suffix = "树叶"; base = base.substring(0, base.length() - 7); }
+        else if (base.endsWith("_slab")) { suffix = "台阶"; base = base.substring(0, base.length() - 5); }
+        else if (base.endsWith("_trapdoor")) { suffix = "活板门"; base = base.substring(0, base.length() - 9); }
+        return materialBaseName(base) + suffix;
+    }
+
+    private static String materialBaseName(String base) {
+        return switch (base) {
+            case "oak" -> "橡木";
+            case "birch" -> "白桦木";
+            case "spruce" -> "云杉木";
+            case "jungle" -> "丛林木";
+            case "acacia" -> "金合欢木";
+            case "dark_oak" -> "深色橡木";
+            case "stone_brick" -> "石砖";
+            case "mossy_stone_brick" -> "苔石砖";
+            case "granite" -> "花岗岩";
+            case "blackstone" -> "黑石";
+            case "andesite" -> "安山岩";
+            case "sandstone" -> "砂岩";
+            case "glass" -> "玻璃";
+            case "stone" -> "石头";
+            case "smooth_stone" -> "平滑石头";
+            default -> base.replace('_', ' ');
+        };
+    }
+
+    private static String directionDisplayName(Direction direction) {
+        return switch (direction) {
+            case NORTH -> "北";
+            case SOUTH -> "南";
+            case WEST -> "西";
+            case EAST -> "东";
+            default -> direction.getName();
+        };
     }
 
     private static Class<?> managerClass() throws ClassNotFoundException {

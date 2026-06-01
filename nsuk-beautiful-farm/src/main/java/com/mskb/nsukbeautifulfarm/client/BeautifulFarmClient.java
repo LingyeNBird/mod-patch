@@ -15,6 +15,7 @@ public final class BeautifulFarmClient {
     public static KeyMapping previousMaterial;
     public static KeyMapping nextMaterial;
     public static KeyMapping rotate;
+    public static KeyMapping detachMouse;
 
     private BeautifulFarmClient() {
     }
@@ -31,12 +32,14 @@ public final class BeautifulFarmClient {
         previousMaterial = key("previous_material", GLFW.GLFW_KEY_UP);
         nextMaterial = key("next_material", GLFW.GLFW_KEY_DOWN);
         rotate = key("rotate", GLFW.GLFW_KEY_R);
+        detachMouse = key("detach_mouse", GLFW.GLFW_KEY_LEFT_ALT);
         event.register(nextOption);
         event.register(previousStyle);
         event.register(nextStyle);
         event.register(previousMaterial);
         event.register(nextMaterial);
         event.register(rotate);
+        event.register(detachMouse);
     }
 
     private static KeyMapping key(String name, int key) {

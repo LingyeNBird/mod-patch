@@ -6,6 +6,7 @@
   "key.nsukbeautifulfarm.previous_material": "Previous material",
   "key.nsukbeautifulfarm.next_material": "Next material",
   "key.nsukbeautifulfarm.rotate": "Rotate decoration",
+  "key.nsukbeautifulfarm.detach_mouse": "Detach/restore mouse",
   "message.nsukbeautifulfarm.saved": "Saved farm decoration settings",
   "message.nsukbeautifulfarm.missing_material": "Beautiful Farm missing material: %s x%d"
 }

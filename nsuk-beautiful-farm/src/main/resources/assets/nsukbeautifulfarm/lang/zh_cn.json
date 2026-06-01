@@ -6,6 +6,7 @@
   "key.nsukbeautifulfarm.previous_material": "上一个材质",
   "key.nsukbeautifulfarm.next_material": "下一个材质",
   "key.nsukbeautifulfarm.rotate": "旋转装饰",
+  "key.nsukbeautifulfarm.detach_mouse": "脱离/恢复鼠标",
   "message.nsukbeautifulfarm.saved": "已保存农田装饰配置",
   "message.nsukbeautifulfarm.missing_material": "美丽农田缺少材料：%s x%d"
 }
