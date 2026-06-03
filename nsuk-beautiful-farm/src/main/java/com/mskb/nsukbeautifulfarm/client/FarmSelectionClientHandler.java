@@ -90,11 +90,16 @@ public final class FarmSelectionClientHandler {
     public static void onMouseButton(InputEvent.MouseButton.Pre event) {
         Minecraft mc = Minecraft.getInstance();
         if (!physicalUiActive || mc.screen == null || !isFarmSelectionScreen(mc.screen) || event.getButton() != GLFW.GLFW_MOUSE_BUTTON_LEFT || event.getAction() != GLFW.GLFW_PRESS) {
+            if (physicalUiActive && mc.screen != null && isFarmSelectionScreen(mc.screen) && event.getAction() == GLFW.GLFW_PRESS && isLookingAtPhysicalPanel(mc)) {
+                event.setCanceled(true);
+            }
             return;
         }
         PhysicalButton hovered = hoveredPhysicalButton(mc);
         if (hovered != null) {
             activate(hovered.action);
+            event.setCanceled(true);
+        } else if (isLookingAtPhysicalPanel(mc)) {
             event.setCanceled(true);
         }
     }
@@ -253,12 +258,9 @@ public final class FarmSelectionClientHandler {
         if (physicalUi == null) {
             return;
         }
-        PhysicalButton hovered = hoveredPhysicalButton(mc);
         MultiBufferSource.BufferSource buffer = MultiBufferSource.immediate(Tesselator.getInstance().getBuilder());
         for (PhysicalButton button : physicalButtons()) {
-            String label = (hovered == button ? "> " : "[ ") + button.label() + (hovered == button ? " <" : " ]");
-            int color = hovered == button ? 0xFFFF55 : 0xFFFFFF;
-            renderWorldLabel(mc, event, buffer, physicalUi.point(button.x, button.y), label, color, camX, camY, camZ);
+            renderWorldLabel(mc, event, buffer, physicalUi.point(button.x, button.y), "[ " + button.label() + " ]", 0xFFFFFF, camX, camY, camZ);
         }
         buffer.endBatch();
     }
@@ -276,6 +278,24 @@ public final class FarmSelectionClientHandler {
     }
 
     private static PhysicalButton hoveredPhysicalButton(Minecraft mc) {
+        PanelHit hit = physicalPanelHit(mc);
+        if (hit == null) {
+            return null;
+        }
+        for (PhysicalButton button : physicalButtons()) {
+            if (hit.x >= button.x - button.w / 2.0D && hit.x <= button.x + button.w / 2.0D && hit.y >= button.y - button.h / 2.0D && hit.y <= button.y + button.h / 2.0D) {
+                return button;
+            }
+        }
+        return null;
+    }
+
+    private static boolean isLookingAtPhysicalPanel(Minecraft mc) {
+        PanelHit hit = physicalPanelHit(mc);
+        return hit != null && hit.x >= -1.95D && hit.x <= 1.65D && hit.y >= -0.45D && hit.y <= 0.80D;
+    }
+
+    private static PanelHit physicalPanelHit(Minecraft mc) {
         if (physicalUi == null) {
             return null;
         }
@@ -291,14 +311,7 @@ public final class FarmSelectionClientHandler {
             return null;
         }
         Vec3 hit = cam.add(ray.scale(t)).subtract(physicalUi.origin);
-        double x = hit.dot(physicalUi.right);
-        double y = hit.dot(physicalUi.up);
-        for (PhysicalButton button : physicalButtons()) {
-            if (x >= button.x - button.w / 2.0D && x <= button.x + button.w / 2.0D && y >= button.y - button.h / 2.0D && y <= button.y + button.h / 2.0D) {
-                return button;
-            }
-        }
-        return null;
+        return new PanelHit(hit.dot(physicalUi.right), hit.dot(physicalUi.up));
     }
 
     private static List<PhysicalButton> physicalButtons() {
@@ -569,6 +582,9 @@ public final class FarmSelectionClientHandler {
                 case COVER -> DecorationOption.WATER_COVER.displayName();
             };
         }
+    }
+
+    private record PanelHit(double x, double y) {
     }
 
     private enum PhysicalAction {
