@@ -66,6 +66,32 @@ public final class LenientFarmingServer {
         return WORK.containsKey(boxPos);
     }
 
+    public static boolean demolish(ServerLevel level, BlockPos boxPos) {
+        if (level == null || boxPos == null) {
+            return false;
+        }
+        WorkState state = WORK.remove(boxPos);
+        PlotBounds bounds = state != null ? state.bounds : getPlot(boxPos);
+        BlockPos chestPos = state != null ? state.chestPos : resolveOrBindChest(level, boxPos);
+        FarmDecorationConfig config = FarmDecorationData.get(boxPos);
+
+        if (bounds != null) {
+            if (config != null) {
+                for (DecorationBlockPlan plan : DecorationPlanner.plan(bounds.min, bounds.max, config)) {
+                    breakAndStore(level, chestPos, plan.pos());
+                }
+            }
+            for (BlockPos base : bounds.positions()) {
+                breakAndStore(level, chestPos, base.above());
+                level.setBlock(base, Blocks.GRASS_BLOCK.defaultBlockState(), 3);
+            }
+        }
+
+        invalidateOriginalWorkflow(level, boxPos);
+        level.removeBlock(boxPos, false);
+        return true;
+    }
+
     public static void start(ServerPlayer player, BlockPos boxPos, String crop, int areaSize) {
         if (player == null || boxPos == null) {
             return;
@@ -114,6 +140,10 @@ public final class LenientFarmingServer {
                     WORK.remove(state.boxPos);
                     continue;
                 }
+                if (!hasHiredFarmer(state.boxPos)) {
+                    WORK.remove(state.boxPos);
+                    continue;
+                }
                 tickWork(level, state);
             }
         }
@@ -134,6 +164,10 @@ public final class LenientFarmingServer {
             return;
         }
         if (plantOne(level, state)) {
+            return;
+        }
+        if (isComplete(level, state)) {
+            WORK.remove(state.boxPos);
             return;
         }
         if (++state.idleTicks >= STATUS_INTERVAL_TICKS / WORK_INTERVAL_TICKS) {
@@ -289,6 +323,85 @@ public final class LenientFarmingServer {
             }
         }
         return needs;
+    }
+
+    private static boolean isComplete(ServerLevel level, WorkState state) {
+        Needs needs = computeNeeds(level, state);
+        return needs.dirt == 0 && needs.seeds == 0 && needs.materials.isEmpty();
+    }
+
+    private static void breakAndStore(ServerLevel level, BlockPos chestPos, BlockPos pos) {
+        BlockState state = level.getBlockState(pos);
+        if (state.isAir()) {
+            return;
+        }
+        List<ItemStack> drops = Block.getDrops(state, level, pos, null);
+        level.destroyBlock(pos, false);
+        for (ItemStack drop : drops) {
+            if (!drop.isEmpty()) {
+                insertOrDrop(level, chestPos, pos, drop);
+            }
+        }
+    }
+
+    private static void insertOrDrop(ServerLevel level, BlockPos chestPos, BlockPos dropPos, ItemStack stack) {
+        ItemStack remaining = stack.copy();
+        if (chestPos != null) {
+            int inserted = insert(level, chestPos, remaining);
+            remaining.shrink(inserted);
+        }
+        if (!remaining.isEmpty()) {
+            net.minecraft.world.entity.item.ItemEntity itemEntity = new net.minecraft.world.entity.item.ItemEntity(
+                    level,
+                    dropPos.getX() + 0.5D,
+                    dropPos.getY() + 0.5D,
+                    dropPos.getZ() + 0.5D,
+                    remaining
+            );
+            itemEntity.setPickUpDelay(10);
+            level.addFreshEntity(itemEntity);
+        }
+    }
+
+    private static int insert(ServerLevel level, BlockPos chestPos, ItemStack stack) {
+        if (chestPos == null || stack.isEmpty()) {
+            return 0;
+        }
+        BlockEntity be = level.getBlockEntity(chestPos);
+        if (be == null) {
+            return 0;
+        }
+        if (be instanceof Container container) {
+            int inserted = 0;
+            for (int i = 0; i < container.getContainerSize() && !stack.isEmpty(); i++) {
+                ItemStack existing = container.getItem(i);
+                if (existing.isEmpty()) {
+                    container.setItem(i, stack.copy());
+                    inserted += stack.getCount();
+                    stack.setCount(0);
+                    container.setChanged();
+                    break;
+                }
+                if (ItemStack.isSameItemSameTags(existing, stack) && existing.getCount() < existing.getMaxStackSize()) {
+                    int moved = Math.min(stack.getCount(), existing.getMaxStackSize() - existing.getCount());
+                    existing.grow(moved);
+                    stack.shrink(moved);
+                    inserted += moved;
+                    container.setChanged();
+                }
+            }
+            return inserted;
+        }
+        return be.getCapability(ForgeCapabilities.ITEM_HANDLER).map(handler -> insert(handler, stack)).orElse(0);
+    }
+
+    private static int insert(IItemHandler handler, ItemStack stack) {
+        int before = stack.getCount();
+        ItemStack remaining = stack.copy();
+        for (int i = 0; i < handler.getSlots() && !remaining.isEmpty(); i++) {
+            remaining = handler.insertItem(i, remaining, false);
+        }
+        return before - remaining.getCount();
     }
 
     private static Set<BlockPos> waterPositions(WorkState state) {
@@ -485,6 +598,23 @@ public final class LenientFarmingServer {
     private static void saveData(MinecraftServer server) {
         try {
             saveAllFarmlandDataMethod().invoke(null, server);
+        } catch (ReflectiveOperationException | LinkageError ignored) {
+        }
+    }
+
+    private static boolean hasHiredFarmer(BlockPos boxPos) {
+        try {
+            return getHiredFarmerMethod().invoke(null, boxPos) != null;
+        } catch (ReflectiveOperationException | LinkageError ignored) {
+            return false;
+        }
+    }
+
+    private static void invalidateOriginalWorkflow(ServerLevel level, BlockPos boxPos) {
+        try {
+            Class<?> managerClass = Class.forName("com.xiaoliang.simukraft.utils.FarmlandManager");
+            managerClass.getMethod("invalidateWorkflow", ServerLevel.class, BlockPos.class, Class.forName("com.xiaoliang.simukraft.entity.CustomEntity"), boolean.class)
+                    .invoke(null, level, boxPos, null, true);
         } catch (ReflectiveOperationException | LinkageError ignored) {
         }
     }

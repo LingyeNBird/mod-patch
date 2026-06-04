@@ -2,6 +2,7 @@ package com.mskb.nsukbeautifulfarm.mixin;
 
 import com.mskb.nsukbeautifulfarm.server.LenientFarmingServer;
 import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -14,5 +15,10 @@ public abstract class FarmlandManagerMixin {
     private static void nsukbeautifulfarm$startLenientFarming(ServerPlayer player, BlockPos boxPos, String crop, int areaSize, CallbackInfoReturnable<Boolean> cir) {
         LenientFarmingServer.start(player, boxPos, crop, areaSize);
         cir.setReturnValue(true);
+    }
+
+    @Inject(method = "demolishFarmland", at = @At("HEAD"), cancellable = true, remap = false)
+    private static void nsukbeautifulfarm$demolishLenientFarmland(ServerLevel level, BlockPos boxPos, CallbackInfoReturnable<Boolean> cir) {
+        cir.setReturnValue(LenientFarmingServer.demolish(level, boxPos));
     }
 }

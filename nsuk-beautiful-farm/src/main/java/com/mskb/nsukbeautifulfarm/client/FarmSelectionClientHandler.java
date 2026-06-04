@@ -181,7 +181,7 @@ public final class FarmSelectionClientHandler {
         int right = screen.width - 132;
         int y = 38;
         for (DecorationOption option : DecorationOption.values()) {
-            drawButton(gui, right, y, 120, option.displayName(), option == selectedOption);
+            drawButton(gui, right, y, 120, optionLabel(option), option == selectedOption);
             y += 24;
         }
     }
@@ -260,9 +260,14 @@ public final class FarmSelectionClientHandler {
         }
         MultiBufferSource.BufferSource buffer = MultiBufferSource.immediate(Tesselator.getInstance().getBuilder());
         for (PhysicalButton button : physicalButtons()) {
-            renderWorldLabel(mc, event, buffer, physicalUi.point(button.x, button.y), "[ " + button.label() + " ]", 0xFFFFFF, camX, camY, camZ);
+            renderWorldLabel(mc, event, buffer, physicalUi.point(button.x, button.y), button.label(), 0xFFFFFF, camX, camY, camZ);
         }
         buffer.endBatch();
+    }
+
+    private static String optionLabel(DecorationOption option) {
+        String text = "[ " + option.displayName() + " ]";
+        return option == selectedOption ? "> " + text + " <" : text;
     }
 
     private static void renderWorldLabel(Minecraft mc, RenderLevelStageEvent event, MultiBufferSource.BufferSource buffer,
@@ -574,12 +579,12 @@ public final class FarmSelectionClientHandler {
     private record PhysicalButton(PhysicalAction action, double x, double y, double w, double h) {
         String label() {
             return switch (action) {
-                case STYLE -> "样式: " + styleName();
-                case MATERIAL -> "材质: " + materialName();
-                case FACING -> "朝向: " + facingName();
-                case BORDER -> DecorationOption.BORDER.displayName();
-                case WATER -> DecorationOption.WATER.displayName();
-                case COVER -> DecorationOption.WATER_COVER.displayName();
+                case STYLE -> "[ 样式: " + styleName() + " ]";
+                case MATERIAL -> "[ 材质: " + materialName() + " ]";
+                case FACING -> "[ 朝向: " + facingName() + " ]";
+                case BORDER -> optionLabel(DecorationOption.BORDER);
+                case WATER -> optionLabel(DecorationOption.WATER);
+                case COVER -> optionLabel(DecorationOption.WATER_COVER);
             };
         }
     }
