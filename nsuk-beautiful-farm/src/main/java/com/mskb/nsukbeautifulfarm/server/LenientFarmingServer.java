@@ -27,6 +27,7 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.ChestType;
+import net.minecraft.world.level.block.state.properties.Property;
 import net.minecraftforge.common.capabilities.ForgeCapabilities;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -175,13 +176,16 @@ public final class LenientFarmingServer {
                     WORK.remove(state.boxPos);
                     continue;
                 }
+                if (!isFarmerAbleToWork(server, state.boxPos)) {
+                    continue;
+                }
                 tickWork(level, state);
             }
         }
     }
 
     private static void tickWork(ServerLevel level, WorkState state) {
-        if (!state.topCleared) {
+        if (!state.maintenanceMode && !state.topCleared) {
             if (clearOne(level, state)) {
                 return;
             }
@@ -197,7 +201,7 @@ public final class LenientFarmingServer {
             return;
         }
         if (isComplete(level, state)) {
-            WORK.remove(state.boxPos);
+            state.maintenanceMode = true;
             return;
         }
         if (++state.idleTicks >= STATUS_INTERVAL_TICKS / WORK_INTERVAL_TICKS) {
@@ -390,7 +394,7 @@ public final class LenientFarmingServer {
             if (!existing.hasProperty(property)) {
                 continue;
             }
-            if (property == BlockStateProperties.POWERED || property == BlockStateProperties.OPEN) {
+            if (isIgnoredDecorationProperty(property)) {
                 continue;
             }
             if (!existing.getValue(property).equals(target.getValue(property))) {
@@ -398,6 +402,17 @@ public final class LenientFarmingServer {
             }
         }
         return true;
+    }
+
+    private static boolean isIgnoredDecorationProperty(Property<?> property) {
+        String name = property.getName();
+        return property == BlockStateProperties.POWERED
+                || property == BlockStateProperties.OPEN
+                || name.equals("north")
+                || name.equals("east")
+                || name.equals("south")
+                || name.equals("west")
+                || name.equals("up");
     }
 
     private static void breakAndStore(ServerLevel level, BlockPos chestPos, BlockPos pos) {
@@ -866,6 +881,28 @@ public final class LenientFarmingServer {
         }
     }
 
+    private static boolean isFarmerAbleToWork(MinecraftServer server, BlockPos boxPos) {
+        try {
+            Object uuid = getHiredFarmerMethod().invoke(null, boxPos);
+            if (uuid == null) {
+                return false;
+            }
+            Object npc = findNpcByUuidMethod().invoke(null, server, uuid);
+            if (npc == null || Boolean.TRUE.equals(npc.getClass().getMethod("isSleeping").invoke(npc))) {
+                return false;
+            }
+            Object workStatus = npc.getClass().getMethod("getWorkStatus").invoke(npc);
+            Object workSubState = npc.getClass().getMethod("getWorkSubState").invoke(npc);
+            return hasEnumName(workStatus, "WORKING") && hasEnumName(workSubState, "WORKING");
+        } catch (ReflectiveOperationException | LinkageError ignored) {
+            return hasHiredFarmer(boxPos);
+        }
+    }
+
+    private static boolean hasEnumName(Object value, String name) {
+        return value instanceof Enum<?> enumValue && enumValue.name().equals(name);
+    }
+
     private static void invalidateOriginalWorkflow(ServerLevel level, BlockPos boxPos) {
         try {
             Class<?> managerClass = Class.forName("com.xiaoliang.simukraft.utils.FarmlandManager");
@@ -979,6 +1016,7 @@ public final class LenientFarmingServer {
         private final PlotBounds bounds;
         private final CropPlan crop;
         private boolean topCleared;
+        private boolean maintenanceMode;
         private int idleTicks;
 
         private WorkState(String dimension, BlockPos boxPos, PlotBounds bounds, CropPlan crop, boolean topCleared) {
