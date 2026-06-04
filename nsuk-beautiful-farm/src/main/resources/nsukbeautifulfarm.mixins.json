@@ -4,6 +4,7 @@
   "package": "com.mskb.nsukbeautifulfarm.mixin",
   "compatibilityLevel": "JAVA_17",
   "mixins": [
+    "FarmerWorkServiceMixin",
     "FarmlandManagerMixin"
   ],
   "client": [],

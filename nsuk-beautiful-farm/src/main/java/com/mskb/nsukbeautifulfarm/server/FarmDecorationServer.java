@@ -26,12 +26,10 @@ import java.util.Queue;
 
 public final class FarmDecorationServer {
     private static final Map<BlockPos, Queue<DecorationBlockPlan>> QUEUES = new HashMap<>();
-    private static final Map<BlockPos, BlockPos> CHESTS = new HashMap<>();
     private static int tickCounter;
 
     private static Class<?> farmlandDataClass;
     private static Method getSelectedPlot;
-    private static Method getBoundChest;
     private static Method minPos;
     private static Method maxPos;
 
@@ -40,7 +38,6 @@ public final class FarmDecorationServer {
 
     public static void reset(BlockPos boxPos) {
         QUEUES.remove(boxPos);
-        CHESTS.remove(boxPos);
     }
 
     @SubscribeEvent
@@ -72,15 +69,13 @@ public final class FarmDecorationServer {
             List<DecorationBlockPlan> plan = DecorationPlanner.plan(bounds.min, bounds.max, config);
             queue = new ArrayDeque<>(plan);
             QUEUES.put(boxPos, queue);
-            CHESTS.put(boxPos, getBoundChest(boxPos));
         }
         DecorationBlockPlan next = queue.poll();
         if (next == null) {
             QUEUES.remove(boxPos);
-            CHESTS.remove(boxPos);
             return;
         }
-        place(level, CHESTS.get(boxPos), next);
+        place(level, LenientFarmingServer.findNearbyUsableChest(level, boxPos), next);
     }
 
     private static boolean looksStarted(ServerLevel level, PlotBounds bounds) {
@@ -158,14 +153,6 @@ public final class FarmDecorationServer {
         }
     }
 
-    private static BlockPos getBoundChest(BlockPos boxPos) {
-        try {
-            return (BlockPos) getBoundChestMethod().invoke(null, boxPos);
-        } catch (ReflectiveOperationException | LinkageError ignored) {
-            return null;
-        }
-    }
-
     private static Class<?> farmlandDataClass() throws ClassNotFoundException {
         if (farmlandDataClass == null) {
             farmlandDataClass = Class.forName("com.xiaoliang.simukraft.world.FarmlandHiredData");
@@ -178,13 +165,6 @@ public final class FarmDecorationServer {
             getSelectedPlot = farmlandDataClass().getMethod("getSelectedPlot", BlockPos.class);
         }
         return getSelectedPlot;
-    }
-
-    private static Method getBoundChestMethod() throws ReflectiveOperationException {
-        if (getBoundChest == null) {
-            getBoundChest = farmlandDataClass().getMethod("getBoundChest", BlockPos.class);
-        }
-        return getBoundChest;
     }
 
     private record PlotBounds(BlockPos min, BlockPos max) {

@@ -19,11 +19,13 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.CropBlock;
 import net.minecraft.world.level.block.FarmBlock;
 import net.minecraft.world.level.block.StemBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.ChestType;
 import net.minecraftforge.common.capabilities.ForgeCapabilities;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -51,8 +53,6 @@ public final class LenientFarmingServer {
     private static Method setSelectedPlot;
     private static Method setSelectedArea;
     private static Method setSelectedCrop;
-    private static Method getBoundChest;
-    private static Method setBoundChest;
     private static Method getHiredFarmer;
     private static Method findNpcByUuid;
     private static Method canUseItemForBlock;
@@ -67,13 +67,43 @@ public final class LenientFarmingServer {
         return WORK.containsKey(boxPos);
     }
 
+    public static boolean shouldSkipHarvestBecauseOutputFull(ServerLevel level, BlockPos boxPos) {
+        if (level == null || boxPos == null) {
+            return false;
+        }
+        BlockPos chestPos = findNearbyUsableChest(level, boxPos);
+        if (!usableChest(level, chestPos)) {
+            return true;
+        }
+        return !hasAnyInsertSpace(level, chestPos);
+    }
+
+    public static BlockPos findNearbyUsableChest(ServerLevel level, BlockPos boxPos) {
+        if (level == null || boxPos == null) {
+            return null;
+        }
+        BlockPos nearest = null;
+        double nearestDistance = Double.MAX_VALUE;
+        for (BlockPos pos : nearbyContainers(level, boxPos)) {
+            if (!hasAnyInsertSpace(level, pos)) {
+                continue;
+            }
+            double distance = pos.distSqr(boxPos);
+            if (distance < nearestDistance) {
+                nearestDistance = distance;
+                nearest = pos;
+            }
+        }
+        return nearest;
+    }
+
     public static boolean demolish(ServerLevel level, BlockPos boxPos) {
         if (level == null || boxPos == null) {
             return false;
         }
         WorkState state = WORK.remove(boxPos);
         PlotBounds bounds = state != null ? state.bounds : getPlot(boxPos);
-        BlockPos chestPos = state != null ? state.chestPos : resolveOrBindChest(level, boxPos);
+        BlockPos chestPos = findNearbyUsableChest(level, boxPos);
         FarmDecorationConfig config = FarmDecorationData.get(boxPos);
 
         if (bounds != null) {
@@ -114,9 +144,8 @@ public final class LenientFarmingServer {
         setCrop(boxPos, cropPlan.selectionId);
         setArea(boxPos, Math.max(bounds.width(), bounds.depth()));
         setNpcWorking(server, boxPos);
-        BlockPos chestPos = resolveOrBindChest(level, boxPos);
 
-        WorkState state = new WorkState(level.dimension().location().toString(), boxPos.immutable(), bounds, cropPlan, chestPos);
+        WorkState state = new WorkState(level.dimension().location().toString(), boxPos.immutable(), bounds, cropPlan);
         WORK.put(boxPos.immutable(), state);
         saveData(server);
         sendNeeds(player, level, state, true);
@@ -151,7 +180,6 @@ public final class LenientFarmingServer {
     }
 
     private static void tickWork(ServerLevel level, WorkState state) {
-        state.chestPos = usableChest(level, state.chestPos) ? state.chestPos : resolveOrBindChest(level, state.boxPos);
         if (!state.topCleared) {
             if (clearOne(level, state)) {
                 return;
@@ -208,7 +236,7 @@ public final class LenientFarmingServer {
             if (existing.getBlock() instanceof FarmBlock) {
                 continue;
             }
-            if (!isFreeDirtEquivalent(existing) && !consume(level, state.chestPos, new ItemStack(Blocks.DIRT))) {
+            if (!isFreeDirtEquivalent(existing) && !consumeNearbyItem(level, state.boxPos, new ItemStack(Blocks.DIRT))) {
                 continue;
             }
             level.setBlock(base, Blocks.FARMLAND.defaultBlockState().setValue(FarmBlock.MOISTURE, 7), 3);
@@ -230,7 +258,7 @@ public final class LenientFarmingServer {
                 continue;
             }
             ItemStack cost = costFor(plan.state());
-            if (!cost.isEmpty() && !consumeBuildingMaterial(level, state.chestPos, plan.state())) {
+            if (!cost.isEmpty() && !consumeNearbyBuildingMaterial(level, state.boxPos, plan.state())) {
                 continue;
             }
             if (plan.state().is(Blocks.WATER) || plan.state().hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED)) {
@@ -262,7 +290,7 @@ public final class LenientFarmingServer {
             if (!level.getBlockState(cropPos).isAir()) {
                 continue;
             }
-            if (!consume(level, state.chestPos, new ItemStack(state.crop.seed))) {
+            if (!consumeNearbyItem(level, state.boxPos, new ItemStack(state.crop.seed))) {
                 continue;
             }
             level.setBlock(cropPos, state.crop.cropBlock.defaultBlockState(), 3);
@@ -274,7 +302,7 @@ public final class LenientFarmingServer {
 
     private static void sendNeeds(ServerPlayer player, ServerLevel level, WorkState state, boolean includeAvailableDirt) {
         Needs needs = computeNeeds(level, state);
-        int dirtAvailable = countItem(level, state.chestPos, new ItemStack(Blocks.DIRT));
+        int dirtAvailable = countNearbyItem(level, state.boxPos, new ItemStack(Blocks.DIRT));
         int dirtNeed = Math.max(0, needs.dirt - dirtAvailable);
         if (includeAvailableDirt) {
             player.displayClientMessage(Component.literal("美丽农田：相邻箱子泥土 " + dirtAvailable + " 个，还需要 " + dirtNeed + " 个泥土。"), false);
@@ -284,12 +312,12 @@ public final class LenientFarmingServer {
         for (Map.Entry<MaterialNeedKey, Integer> entry : needs.materials.entrySet()) {
             BlockState materialState = entry.getKey().state();
             ItemStack stack = costFor(materialState);
-            int missing = Math.max(0, entry.getValue() - countBuildingMaterial(level, state.chestPos, materialState));
+            int missing = Math.max(0, entry.getValue() - countNearbyBuildingMaterial(level, state.boxPos, materialState));
             if (missing > 0) {
                 player.displayClientMessage(Component.literal("美丽农田：装饰还需要 " + missing + " 个 " + stack.getHoverName().getString() + "。"), false);
             }
         }
-        int seedMissing = Math.max(0, needs.seeds - countItem(level, state.chestPos, new ItemStack(state.crop.seed)));
+        int seedMissing = Math.max(0, needs.seeds - countNearbyItem(level, state.boxPos, new ItemStack(state.crop.seed)));
         if (seedMissing > 0) {
             player.displayClientMessage(Component.literal("美丽农田：种植还需要 " + seedMissing + " 个 " + state.crop.seed.getDescription().getString() + "。"), false);
         }
@@ -485,40 +513,115 @@ public final class LenientFarmingServer {
         }
     }
 
-    private static BlockPos resolveOrBindChest(ServerLevel level, BlockPos boxPos) {
-        BlockPos bound = getBoundChest(boxPos);
-        if (usableChest(level, bound)) {
-            return bound;
-        }
-        BlockPos nearest = null;
-        double nearestDistance = Double.MAX_VALUE;
-        for (int x = -8; x <= 8; x++) {
-            for (int y = -3; y <= 3; y++) {
-                for (int z = -8; z <= 8; z++) {
-                    BlockPos pos = boxPos.offset(x, y, z);
-                    if (!usableChest(level, pos)) {
-                        continue;
-                    }
-                    double distance = pos.distSqr(boxPos);
-                    if (distance < nearestDistance) {
-                        nearestDistance = distance;
-                        nearest = pos.immutable();
-                    }
-                }
-            }
-        }
-        if (nearest != null) {
-            setBoundChest(boxPos, nearest);
-        }
-        return nearest;
-    }
-
     private static boolean usableChest(ServerLevel level, BlockPos pos) {
         if (pos == null) {
             return false;
         }
         BlockEntity be = level.getBlockEntity(pos);
         return be instanceof Container || be != null && be.getCapability(ForgeCapabilities.ITEM_HANDLER).isPresent();
+    }
+
+    private static boolean hasAnyInsertSpace(ServerLevel level, BlockPos chestPos) {
+        BlockEntity be = level.getBlockEntity(chestPos);
+        if (be == null) {
+            return false;
+        }
+        if (be instanceof Container container) {
+            for (int i = 0; i < container.getContainerSize(); i++) {
+                ItemStack stack = container.getItem(i);
+                if (stack.isEmpty() || stack.getCount() < Math.min(stack.getMaxStackSize(), container.getMaxStackSize())) {
+                    return true;
+                }
+            }
+        }
+        return be.getCapability(ForgeCapabilities.ITEM_HANDLER).map(LenientFarmingServer::hasAnyInsertSpace).orElse(false);
+    }
+
+    private static boolean hasAnyInsertSpace(IItemHandler handler) {
+        for (int i = 0; i < handler.getSlots(); i++) {
+            ItemStack stack = handler.getStackInSlot(i);
+            if (stack.isEmpty()) {
+                return true;
+            }
+            if (stack.getCount() >= Math.min(stack.getMaxStackSize(), handler.getSlotLimit(i))) {
+                continue;
+            }
+            ItemStack probe = stack.copy();
+            probe.setCount(1);
+            if (handler.insertItem(i, probe, true).isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean consumeNearbyItem(ServerLevel level, BlockPos boxPos, ItemStack cost) {
+        for (BlockPos chestPos : nearbyContainers(level, boxPos)) {
+            if (consume(level, chestPos, cost.copy())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean consumeNearbyBuildingMaterial(ServerLevel level, BlockPos boxPos, BlockState targetState) {
+        for (BlockPos chestPos : nearbyContainers(level, boxPos)) {
+            if (consumeBuildingMaterial(level, chestPos, targetState)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static int countNearbyItem(ServerLevel level, BlockPos boxPos, ItemStack template) {
+        int count = 0;
+        for (BlockPos chestPos : nearbyContainers(level, boxPos)) {
+            count += countItem(level, chestPos, template);
+        }
+        return count;
+    }
+
+    private static int countNearbyBuildingMaterial(ServerLevel level, BlockPos boxPos, BlockState targetState) {
+        int count = 0;
+        for (BlockPos chestPos : nearbyContainers(level, boxPos)) {
+            count += countBuildingMaterial(level, chestPos, targetState);
+        }
+        return count;
+    }
+
+    private static List<BlockPos> nearbyContainers(ServerLevel level, BlockPos boxPos) {
+        java.util.ArrayList<BlockPos> result = new java.util.ArrayList<>();
+        for (int x = -8; x <= 8; x++) {
+            for (int y = -3; y <= 3; y++) {
+                for (int z = -8; z <= 8; z++) {
+                    BlockPos pos = boxPos.offset(x, y, z);
+                    if (usableChest(level, pos)) {
+                        result.add(pos.immutable());
+                        BlockPos otherHalf = otherDoubleChestHalf(level, pos);
+                        if (otherHalf != null && usableChest(level, otherHalf) && !result.contains(otherHalf)) {
+                            result.add(otherHalf.immutable());
+                        }
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    private static BlockPos otherDoubleChestHalf(ServerLevel level, BlockPos pos) {
+        BlockState state = level.getBlockState(pos);
+        if (!(state.getBlock() instanceof ChestBlock) || !state.hasProperty(ChestBlock.TYPE) || !state.hasProperty(ChestBlock.FACING)) {
+            return null;
+        }
+        ChestType type = state.getValue(ChestBlock.TYPE);
+        if (type == ChestType.SINGLE) {
+            return null;
+        }
+        Direction facing = state.getValue(ChestBlock.FACING);
+        Direction side = type == ChestType.LEFT ? facing.getClockWise() : facing.getCounterClockWise();
+        BlockPos other = pos.relative(side);
+        BlockState otherState = level.getBlockState(other);
+        return otherState.getBlock() instanceof ChestBlock ? other : null;
     }
 
     private static boolean consume(ServerLevel level, BlockPos chestPos, ItemStack cost) {
@@ -530,6 +633,9 @@ public final class LenientFarmingServer {
             return false;
         }
         if (be instanceof Container container) {
+            if (countItem(level, chestPos, cost) < cost.getCount()) {
+                return false;
+            }
             int remaining = cost.getCount();
             for (int i = 0; i < container.getContainerSize() && remaining > 0; i++) {
                 ItemStack stack = container.getItem(i);
@@ -547,6 +653,9 @@ public final class LenientFarmingServer {
     }
 
     private static boolean consume(IItemHandler handler, ItemStack cost) {
+        if (countItem(handler, cost) < cost.getCount()) {
+            return false;
+        }
         int remaining = cost.getCount();
         for (int i = 0; i < handler.getSlots() && remaining > 0; i++) {
             ItemStack stack = handler.getStackInSlot(i);
@@ -710,21 +819,6 @@ public final class LenientFarmingServer {
         }
     }
 
-    private static BlockPos getBoundChest(BlockPos boxPos) {
-        try {
-            return (BlockPos) getBoundChestMethod().invoke(null, boxPos);
-        } catch (ReflectiveOperationException | LinkageError ignored) {
-            return null;
-        }
-    }
-
-    private static void setBoundChest(BlockPos boxPos, BlockPos chestPos) {
-        try {
-            setBoundChestMethod().invoke(null, boxPos, chestPos);
-        } catch (ReflectiveOperationException | LinkageError ignored) {
-        }
-    }
-
     private static void setNpcWorking(MinecraftServer server, BlockPos boxPos) {
         try {
             Object uuid = getHiredFarmerMethod().invoke(null, boxPos);
@@ -785,16 +879,6 @@ public final class LenientFarmingServer {
         return setSelectedCrop;
     }
 
-    private static Method getBoundChestMethod() throws ReflectiveOperationException {
-        if (getBoundChest == null) getBoundChest = farmlandDataClass().getMethod("getBoundChest", BlockPos.class);
-        return getBoundChest;
-    }
-
-    private static Method setBoundChestMethod() throws ReflectiveOperationException {
-        if (setBoundChest == null) setBoundChest = farmlandDataClass().getMethod("setBoundChest", BlockPos.class, BlockPos.class);
-        return setBoundChest;
-    }
-
     private static Method getHiredFarmerMethod() throws ReflectiveOperationException {
         if (getHiredFarmer == null) getHiredFarmer = farmlandDataClass().getMethod("getHiredFarmer", BlockPos.class);
         return getHiredFarmer;
@@ -824,16 +908,14 @@ public final class LenientFarmingServer {
         private final BlockPos boxPos;
         private final PlotBounds bounds;
         private final CropPlan crop;
-        private BlockPos chestPos;
         private boolean topCleared;
         private int idleTicks;
 
-        private WorkState(String dimension, BlockPos boxPos, PlotBounds bounds, CropPlan crop, BlockPos chestPos) {
+        private WorkState(String dimension, BlockPos boxPos, PlotBounds bounds, CropPlan crop) {
             this.dimension = dimension;
             this.boxPos = boxPos;
             this.bounds = bounds;
             this.crop = crop;
-            this.chestPos = chestPos;
         }
     }
 
