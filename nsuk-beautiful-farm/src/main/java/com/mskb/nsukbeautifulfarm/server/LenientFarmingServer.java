@@ -55,6 +55,7 @@ public final class LenientFarmingServer {
     private static Method setBoundChest;
     private static Method getHiredFarmer;
     private static Method findNpcByUuid;
+    private static Method canUseItemForBlock;
     private static Method minPos;
     private static Method maxPos;
     private static Constructor<?> farmlandPlotConstructor;
@@ -229,7 +230,7 @@ public final class LenientFarmingServer {
                 continue;
             }
             ItemStack cost = costFor(plan.state());
-            if (!cost.isEmpty() && !consume(level, state.chestPos, cost)) {
+            if (!cost.isEmpty() && !consumeBuildingMaterial(level, state.chestPos, plan.state())) {
                 continue;
             }
             if (plan.state().is(Blocks.WATER) || plan.state().hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.WATERLOGGED)) {
@@ -280,9 +281,10 @@ public final class LenientFarmingServer {
         } else if (needs.dirt > 0) {
             player.displayClientMessage(Component.literal("美丽农田：还需要 " + dirtNeed + " 个泥土。"), false);
         }
-        for (Map.Entry<ItemKey, Integer> entry : needs.materials.entrySet()) {
-            ItemStack stack = entry.getKey().stack();
-            int missing = Math.max(0, entry.getValue() - countItem(level, state.chestPos, stack));
+        for (Map.Entry<MaterialNeedKey, Integer> entry : needs.materials.entrySet()) {
+            BlockState materialState = entry.getKey().state();
+            ItemStack stack = costFor(materialState);
+            int missing = Math.max(0, entry.getValue() - countBuildingMaterial(level, state.chestPos, materialState));
             if (missing > 0) {
                 player.displayClientMessage(Component.literal("美丽农田：装饰还需要 " + missing + " 个 " + stack.getHoverName().getString() + "。"), false);
             }
@@ -318,7 +320,7 @@ public final class LenientFarmingServer {
                 }
                 ItemStack cost = costFor(plan.state());
                 if (!cost.isEmpty()) {
-                    needs.materials.merge(new ItemKey(cost), cost.getCount(), Integer::sum);
+                    needs.materials.merge(new MaterialNeedKey(plan.state()), cost.getCount(), Integer::sum);
                 }
             }
         }
@@ -556,6 +558,40 @@ public final class LenientFarmingServer {
         return remaining == 0;
     }
 
+    private static boolean consumeBuildingMaterial(ServerLevel level, BlockPos chestPos, BlockState targetState) {
+        if (chestPos == null || targetState.isAir()) {
+            return false;
+        }
+        BlockEntity be = level.getBlockEntity(chestPos);
+        if (be == null) {
+            return false;
+        }
+        if (be instanceof Container container) {
+            for (int i = 0; i < container.getContainerSize(); i++) {
+                ItemStack stack = container.getItem(i);
+                if (!stack.isEmpty() && canUseItemForBlock(stack, targetState)) {
+                    stack.shrink(1);
+                    container.setChanged();
+                    return true;
+                }
+            }
+        }
+        return be.getCapability(ForgeCapabilities.ITEM_HANDLER).map(handler -> consumeBuildingMaterial(handler, targetState)).orElse(false);
+    }
+
+    private static boolean consumeBuildingMaterial(IItemHandler handler, BlockState targetState) {
+        for (int i = 0; i < handler.getSlots(); i++) {
+            ItemStack stack = handler.getStackInSlot(i);
+            if (!stack.isEmpty() && canUseItemForBlock(stack, targetState)) {
+                ItemStack extracted = handler.extractItem(i, 1, false);
+                if (!extracted.isEmpty()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private static int countItem(ServerLevel level, BlockPos chestPos, ItemStack template) {
         if (chestPos == null || template.isEmpty()) {
             return 0;
@@ -575,6 +611,47 @@ public final class LenientFarmingServer {
             return count;
         }
         return be.getCapability(ForgeCapabilities.ITEM_HANDLER).map(handler -> countItem(handler, template)).orElse(0);
+    }
+
+    private static int countBuildingMaterial(ServerLevel level, BlockPos chestPos, BlockState targetState) {
+        if (chestPos == null || targetState.isAir()) {
+            return 0;
+        }
+        BlockEntity be = level.getBlockEntity(chestPos);
+        if (be == null) {
+            return 0;
+        }
+        if (be instanceof Container container) {
+            int count = 0;
+            for (int i = 0; i < container.getContainerSize(); i++) {
+                ItemStack stack = container.getItem(i);
+                if (!stack.isEmpty() && canUseItemForBlock(stack, targetState)) {
+                    count += stack.getCount();
+                }
+            }
+            return count;
+        }
+        return be.getCapability(ForgeCapabilities.ITEM_HANDLER).map(handler -> countBuildingMaterial(handler, targetState)).orElse(0);
+    }
+
+    private static int countBuildingMaterial(IItemHandler handler, BlockState targetState) {
+        int count = 0;
+        for (int i = 0; i < handler.getSlots(); i++) {
+            ItemStack stack = handler.getStackInSlot(i);
+            if (!stack.isEmpty() && canUseItemForBlock(stack, targetState)) {
+                count += stack.getCount();
+            }
+        }
+        return count;
+    }
+
+    private static boolean canUseItemForBlock(ItemStack stack, BlockState targetState) {
+        try {
+            return (Boolean) canUseItemForBlockMethod().invoke(null, stack, targetState);
+        } catch (ReflectiveOperationException | LinkageError ignored) {
+            Item item = targetState.getBlock().asItem();
+            return item != Items.AIR && ItemStack.isSameItemSameTags(stack, new ItemStack(item));
+        }
     }
 
     private static int countItem(IItemHandler handler, ItemStack template) {
@@ -728,6 +805,13 @@ public final class LenientFarmingServer {
         return findNpcByUuid;
     }
 
+    private static Method canUseItemForBlockMethod() throws ReflectiveOperationException {
+        if (canUseItemForBlock == null) {
+            canUseItemForBlock = Class.forName("com.xiaoliang.simukraft.utils.MaterialManager").getMethod("canUseItemForBlock", ItemStack.class, BlockState.class);
+        }
+        return canUseItemForBlock;
+    }
+
     private static Constructor<?> farmlandPlotConstructor() throws ReflectiveOperationException {
         if (farmlandPlotConstructor == null) {
             farmlandPlotConstructor = Class.forName("com.xiaoliang.simukraft.farmland.FarmlandPlot").getConstructor(BlockPos.class, BlockPos.class);
@@ -756,17 +840,10 @@ public final class LenientFarmingServer {
     private static final class Needs {
         private int dirt;
         private int seeds;
-        private final Map<ItemKey, Integer> materials = new LinkedHashMap<>();
+        private final Map<MaterialNeedKey, Integer> materials = new LinkedHashMap<>();
     }
 
-    private record ItemKey(Item item) {
-        private ItemKey(ItemStack stack) {
-            this(stack.getItem());
-        }
-
-        private ItemStack stack() {
-            return new ItemStack(item);
-        }
+    private record MaterialNeedKey(BlockState state) {
     }
 
     private static final class PlotBounds {
