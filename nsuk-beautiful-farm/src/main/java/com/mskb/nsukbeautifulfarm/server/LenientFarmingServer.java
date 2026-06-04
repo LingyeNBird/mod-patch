@@ -25,6 +25,7 @@ import net.minecraft.world.level.block.FarmBlock;
 import net.minecraft.world.level.block.StemBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.ChestType;
 import net.minecraftforge.common.capabilities.ForgeCapabilities;
 import net.minecraftforge.event.TickEvent;
@@ -145,7 +146,7 @@ public final class LenientFarmingServer {
         setArea(boxPos, Math.max(bounds.width(), bounds.depth()));
         setNpcWorking(server, boxPos);
 
-        WorkState state = new WorkState(level.dimension().location().toString(), boxPos.immutable(), bounds, cropPlan);
+        WorkState state = new WorkState(level.dimension().location().toString(), boxPos.immutable(), bounds, cropPlan, isPartiallyStarted(level, bounds));
         WORK.put(boxPos.immutable(), state);
         saveData(server);
         sendNeeds(player, level, state, true);
@@ -225,7 +226,7 @@ public final class LenientFarmingServer {
         Set<BlockPos> water = waterPositions(state);
         for (BlockPos base : state.bounds.positions()) {
             if (water.contains(base)) {
-                if (!level.getBlockState(base).is(Blocks.WATER)) {
+                if (!isWaterSatisfied(level.getBlockState(base))) {
                     level.setBlock(base, Blocks.WATER.defaultBlockState(), 3);
                     state.idleTicks = 0;
                     return true;
@@ -254,7 +255,7 @@ public final class LenientFarmingServer {
         List<DecorationBlockPlan> plans = DecorationPlanner.plan(state.bounds.min, state.bounds.max, config);
         for (DecorationBlockPlan plan : plans) {
             BlockState existing = level.getBlockState(plan.pos());
-            if (existing.equals(plan.state())) {
+            if (isDecorationSatisfied(existing, plan.state())) {
                 continue;
             }
             ItemStack cost = costFor(plan.state());
@@ -287,7 +288,11 @@ public final class LenientFarmingServer {
                 return true;
             }
             BlockPos cropPos = base.above();
-            if (!level.getBlockState(cropPos).isAir()) {
+            BlockState existingCrop = level.getBlockState(cropPos);
+            if (existingCrop.is(state.crop.cropBlock)) {
+                continue;
+            }
+            if (!existingCrop.isAir()) {
                 continue;
             }
             if (!consumeNearbyItem(level, state.boxPos, new ItemStack(state.crop.seed))) {
@@ -343,7 +348,7 @@ public final class LenientFarmingServer {
         FarmDecorationConfig config = FarmDecorationData.get(state.boxPos);
         if (config != null) {
             for (DecorationBlockPlan plan : DecorationPlanner.plan(state.bounds.min, state.bounds.max, config)) {
-                if (level.getBlockState(plan.pos()).equals(plan.state())) {
+                if (isDecorationSatisfied(level.getBlockState(plan.pos()), plan.state())) {
                     continue;
                 }
                 ItemStack cost = costFor(plan.state());
@@ -358,6 +363,41 @@ public final class LenientFarmingServer {
     private static boolean isComplete(ServerLevel level, WorkState state) {
         Needs needs = computeNeeds(level, state);
         return needs.dirt == 0 && needs.seeds == 0 && needs.materials.isEmpty();
+    }
+
+    private static boolean isPartiallyStarted(ServerLevel level, PlotBounds bounds) {
+        for (BlockPos base : bounds.positions()) {
+            if (level.getBlockState(base).getBlock() instanceof FarmBlock || !level.getBlockState(base.above()).isAir()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isWaterSatisfied(BlockState existing) {
+        return existing.is(Blocks.WATER)
+                || existing.hasProperty(BlockStateProperties.WATERLOGGED) && Boolean.TRUE.equals(existing.getValue(BlockStateProperties.WATERLOGGED));
+    }
+
+    private static boolean isDecorationSatisfied(BlockState existing, BlockState target) {
+        if (existing.equals(target)) {
+            return true;
+        }
+        if (!existing.is(target.getBlock())) {
+            return false;
+        }
+        for (var property : target.getProperties()) {
+            if (!existing.hasProperty(property)) {
+                continue;
+            }
+            if (property == BlockStateProperties.POWERED || property == BlockStateProperties.OPEN) {
+                continue;
+            }
+            if (!existing.getValue(property).equals(target.getValue(property))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static void breakAndStore(ServerLevel level, BlockPos chestPos, BlockPos pos) {
@@ -756,11 +796,41 @@ public final class LenientFarmingServer {
 
     private static boolean canUseItemForBlock(ItemStack stack, BlockState targetState) {
         try {
-            return (Boolean) canUseItemForBlockMethod().invoke(null, stack, targetState);
+            if ((Boolean) canUseItemForBlockMethod().invoke(null, stack, targetState)) {
+                return true;
+            }
         } catch (ReflectiveOperationException | LinkageError ignored) {
-            Item item = targetState.getBlock().asItem();
-            return item != Items.AIR && ItemStack.isSameItemSameTags(stack, new ItemStack(item));
         }
+        return isSameMaterialFamily(stack, targetState);
+    }
+
+    private static boolean isSameMaterialFamily(ItemStack stack, BlockState targetState) {
+        Item item = targetState.getBlock().asItem();
+        if (item != Items.AIR && ItemStack.isSameItemSameTags(stack, new ItemStack(item))) {
+            return true;
+        }
+        ResourceLocation providedId = BuiltInRegistries.ITEM.getKey(stack.getItem());
+        ResourceLocation requiredId = BuiltInRegistries.ITEM.getKey(item);
+        if (providedId == null || requiredId == null || !providedId.getNamespace().equals(requiredId.getNamespace())) {
+            return false;
+        }
+        String provided = providedId.getPath();
+        String required = requiredId.getPath();
+        return sameSuffix(provided, required, "_trapdoor")
+                || sameSuffix(provided, required, "_fence")
+                || sameSuffix(provided, required, "_fence_gate")
+                || sameSuffix(provided, required, "_slab")
+                || sameSuffix(provided, required, "_stairs")
+                || sameSuffix(provided, required, "_planks")
+                || sameSuffix(provided, required, "_log")
+                || sameSuffix(provided, required, "_wood")
+                || sameSuffix(provided, required, "_leaves")
+                || sameSuffix(provided, required, "_wall")
+                || sameSuffix(provided, required, "_pane");
+    }
+
+    private static boolean sameSuffix(String provided, String required, String suffix) {
+        return provided.endsWith(suffix) && required.endsWith(suffix);
     }
 
     private static int countItem(IItemHandler handler, ItemStack template) {
@@ -911,11 +981,12 @@ public final class LenientFarmingServer {
         private boolean topCleared;
         private int idleTicks;
 
-        private WorkState(String dimension, BlockPos boxPos, PlotBounds bounds, CropPlan crop) {
+        private WorkState(String dimension, BlockPos boxPos, PlotBounds bounds, CropPlan crop, boolean topCleared) {
             this.dimension = dimension;
             this.boxPos = boxPos;
             this.bounds = bounds;
             this.crop = crop;
+            this.topCleared = topCleared;
         }
     }
 
