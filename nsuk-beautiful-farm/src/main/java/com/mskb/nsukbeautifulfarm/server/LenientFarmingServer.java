@@ -205,13 +205,13 @@ public final class LenientFarmingServer {
                 continue;
             }
             BlockState existing = level.getBlockState(base);
-            if (existing.is(Blocks.DIRT) || existing.getBlock() instanceof FarmBlock) {
+            if (existing.getBlock() instanceof FarmBlock) {
                 continue;
             }
             if (!isFreeDirtEquivalent(existing) && !consume(level, state.chestPos, new ItemStack(Blocks.DIRT))) {
                 continue;
             }
-            level.setBlock(base, Blocks.DIRT.defaultBlockState(), 3);
+            level.setBlock(base, Blocks.FARMLAND.defaultBlockState().setValue(FarmBlock.MOISTURE, 7), 3);
             state.idleTicks = 0;
             return true;
         }
