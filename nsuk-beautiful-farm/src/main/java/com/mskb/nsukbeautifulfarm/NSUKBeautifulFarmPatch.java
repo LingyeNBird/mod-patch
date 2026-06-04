@@ -4,6 +4,7 @@ import com.mskb.nsukbeautifulfarm.client.BeautifulFarmClient;
 import com.mskb.nsukbeautifulfarm.network.BeautifulFarmNetwork;
 import com.mskb.nsukbeautifulfarm.server.FarmDecorationData;
 import com.mskb.nsukbeautifulfarm.server.FarmDecorationServer;
+import com.mskb.nsukbeautifulfarm.server.LenientFarmingServer;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.eventbus.api.IEventBus;
@@ -20,6 +21,7 @@ public final class NSUKBeautifulFarmPatch {
         BeautifulFarmNetwork.register();
         MinecraftForge.EVENT_BUS.register(FarmDecorationData.class);
         MinecraftForge.EVENT_BUS.register(FarmDecorationServer.class);
+        MinecraftForge.EVENT_BUS.register(LenientFarmingServer.class);
         DistExecutor.safeRunWhenOn(Dist.CLIENT, () -> () -> BeautifulFarmClient.register(modEventBus));
     }
 }

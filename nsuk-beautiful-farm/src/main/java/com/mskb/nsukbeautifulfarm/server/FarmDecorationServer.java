@@ -60,6 +60,9 @@ public final class FarmDecorationServer {
     }
 
     private static void tickFarm(ServerLevel level, BlockPos boxPos, FarmDecorationConfig config) {
+        if (LenientFarmingServer.isManaged(boxPos)) {
+            return;
+        }
         Queue<DecorationBlockPlan> queue = QUEUES.get(boxPos);
         if (queue == null) {
             PlotBounds bounds = getPlotBounds(boxPos);
