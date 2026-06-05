@@ -100,20 +100,16 @@ public final class LenientFarmingServer {
             }
             state = new WorkState(level.dimension().location().toString(), boxPos.immutable(), bounds, crop, true);
         }
-        BlockPos chestPos = findNearbyUsableChest(level, boxPos);
-        if (!usableChest(level, chestPos)) {
-            return true;
-        }
         for (BlockPos base : state.bounds.positions()) {
             BlockPos cropPos = base.above();
             BlockState cropState = level.getBlockState(cropPos);
             Block block = cropState.getBlock();
             if (isRightClickHarvestCrop(block)) {
-                harvestRightClickCrop(level, chestPos, cropPos, cropState);
+                harvestRightClickCrop(level, boxPos, cropPos, cropState);
             } else if (state.crop.cropBlock instanceof StemBlock) {
-                harvestStemFruit(level, chestPos, cropPos, state.crop.cropBlock);
+                harvestStemFruit(level, boxPos, cropPos, state.crop.cropBlock);
             } else {
-                harvestRegularCrop(level, chestPos, cropPos, cropState, state.crop, npc);
+                harvestRegularCrop(level, boxPos, cropPos, cropState, state.crop, npc);
             }
         }
         return true;
@@ -557,7 +553,7 @@ public final class LenientFarmingServer {
         return (dx + dz) % 2 == 0;
     }
 
-    private static void harvestRightClickCrop(ServerLevel level, BlockPos chestPos, BlockPos pos, BlockState state) {
+    private static void harvestRightClickCrop(ServerLevel level, BlockPos boxPos, BlockPos pos, BlockState state) {
         if (!isRightClickCropMature(state)) {
             return;
         }
@@ -567,14 +563,15 @@ public final class LenientFarmingServer {
         } else {
             drops.addAll(Block.getDrops(state, level, pos, null));
         }
-        if (!canInsertAll(level, chestPos, drops)) {
+        BlockPos chestPos = findChestForHarvest(level, boxPos, drops, ItemStack.EMPTY);
+        if (chestPos == null) {
             return;
         }
         insertAll(level, chestPos, drops);
         resetCropAge(level, pos, state);
     }
 
-    private static void harvestRegularCrop(ServerLevel level, BlockPos chestPos, BlockPos pos, BlockState state, CropPlan crop, Object npc) {
+    private static void harvestRegularCrop(ServerLevel level, BlockPos boxPos, BlockPos pos, BlockState state, CropPlan crop, Object npc) {
         if (!state.is(crop.cropBlock) || !isStandardCropMature(state)) {
             return;
         }
@@ -583,7 +580,8 @@ public final class LenientFarmingServer {
         if (seedToConsume == null) {
             return;
         }
-        if (!canInsertAll(level, chestPos, drops)) {
+        BlockPos chestPos = findChestForHarvest(level, boxPos, drops, seedToConsume);
+        if (chestPos == null) {
             return;
         }
         if (!seedToConsume.isEmpty() && !consume(level, chestPos, seedToConsume)) {
@@ -596,7 +594,7 @@ public final class LenientFarmingServer {
         insertAll(level, chestPos, drops);
     }
 
-    private static void harvestStemFruit(ServerLevel level, BlockPos chestPos, BlockPos stemPos, Block cropBlock) {
+    private static void harvestStemFruit(ServerLevel level, BlockPos boxPos, BlockPos stemPos, Block cropBlock) {
         BlockState stemState = level.getBlockState(stemPos);
         if (!isStemCropReadyForHarvest(stemState, cropBlock)) {
             return;
@@ -612,7 +610,8 @@ public final class LenientFarmingServer {
                 continue;
             }
             List<ItemStack> drops = new java.util.ArrayList<>(Block.getDrops(fruitState, level, fruitPos, null));
-            if (!canInsertAll(level, chestPos, drops)) {
+            BlockPos chestPos = findChestForHarvest(level, boxPos, drops, ItemStack.EMPTY);
+            if (chestPos == null) {
                 return;
             }
             level.setBlockAndUpdate(fruitPos, Blocks.AIR.defaultBlockState());
@@ -641,6 +640,25 @@ public final class LenientFarmingServer {
         ItemStack seed = seedTemplate.copy();
         seed.setCount(1);
         return seed;
+    }
+
+    private static BlockPos findChestForHarvest(ServerLevel level, BlockPos boxPos, List<ItemStack> drops, ItemStack seedToConsume) {
+        BlockPos best = null;
+        double bestDistance = Double.MAX_VALUE;
+        for (BlockPos chestPos : nearbyContainers(level, boxPos)) {
+            if (!seedToConsume.isEmpty() && countItem(level, chestPos, seedToConsume) < seedToConsume.getCount()) {
+                continue;
+            }
+            if (!canInsertAll(level, chestPos, drops)) {
+                continue;
+            }
+            double distance = chestPos.distSqr(boxPos);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                best = chestPos;
+            }
+        }
+        return best;
     }
 
     private static boolean isRightClickHarvestCrop(Block block) {
