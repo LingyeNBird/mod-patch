@@ -99,6 +99,24 @@ public final class LenientFarmingServer {
         return nearest;
     }
 
+    public static boolean storeHarvestDrop(ServerLevel level, BlockPos dropPos, ItemStack stack) {
+        if (level == null || dropPos == null || stack == null || stack.isEmpty()) {
+            return false;
+        }
+        String dimension = level.dimension().location().toString();
+        for (WorkState state : List.copyOf(WORK.values())) {
+            if (!state.dimension.equals(dimension) || !state.bounds.containsHarvestDrop(dropPos)) {
+                continue;
+            }
+            BlockPos chestPos = findNearbyUsableChest(level, state.boxPos);
+            if (!usableChest(level, chestPos)) {
+                continue;
+            }
+            return insert(level, chestPos, stack.copy()) >= stack.getCount();
+        }
+        return false;
+    }
+
     public static boolean demolish(ServerLevel level, BlockPos boxPos) {
         if (level == null || boxPos == null) {
             return false;
@@ -1064,6 +1082,15 @@ public final class LenientFarmingServer {
                 }
             }
             return result;
+        }
+
+        private boolean containsHarvestDrop(BlockPos pos) {
+            return pos.getX() >= min.getX() - 1
+                    && pos.getX() <= max.getX() + 1
+                    && pos.getY() >= min.getY()
+                    && pos.getY() <= max.getY() + 2
+                    && pos.getZ() >= min.getZ() - 1
+                    && pos.getZ() <= max.getZ() + 1;
         }
     }
 
