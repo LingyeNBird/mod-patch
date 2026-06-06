@@ -1,6 +1,7 @@
 package com.mskb.nsukbeautifulfarm.mixin;
 
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -18,6 +19,9 @@ public abstract class FarmlandBoxScreenMixin {
             remap = false
     )
     private void nsukbeautifulfarm$closeAfterStartFarming(CallbackInfo ci) {
-        Minecraft.getInstance().setScreen(null);
+        Screen screen = Minecraft.getInstance().screen;
+        if (screen == (Object) this) {
+            screen.onClose();
+        }
     }
 }
