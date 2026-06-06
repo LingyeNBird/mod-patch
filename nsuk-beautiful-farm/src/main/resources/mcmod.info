@@ -1,14 +1,11 @@
 [
   {
-    "modid": "${mod_id}",
-    "name": "${mod_name}",
-    "description": "${mod_description}",
+    "modid": "nsukbeautifulfarm",
+    "name": "NSUK 美丽农田补丁",
+    "description": "增强 New Sim-U-Kraft 农田盒，提供美化装饰、宽松修复、持久化耕种任务、暂停/终止控制与安全收割入箱。",
     "version": "${mod_version}",
-    "mcversion": "${minecraft_version_range}",
-    "authorList": ["${mod_authors}"],
-    "credits": "",
-    "logoFile": "",
-    "screenshots": [],
+    "authorList": ["MSKB"],
+    "logoFile": "icon.png",
     "dependencies": ["simukraft"]
   }
 ]
