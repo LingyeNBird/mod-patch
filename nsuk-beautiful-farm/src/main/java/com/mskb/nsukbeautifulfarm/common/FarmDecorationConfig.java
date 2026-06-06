@@ -13,10 +13,15 @@ public final class FarmDecorationConfig {
     public Direction waterFacing = Direction.NORTH;
     public int waterOffsetX = 0;
     public int waterOffsetZ = 0;
+    public int waterSpacing = 8;
 
     public CoverStyle coverStyle = CoverStyle.NONE;
     public ResourceLocation coverMaterial = new ResourceLocation("minecraft", "oak_leaves");
     public Direction coverFacing = Direction.NORTH;
+
+    public ScarecrowStyle scarecrowStyle = ScarecrowStyle.NONE;
+    public Direction scarecrowFacing = Direction.NORTH;
+    public int scarecrowSpacing = 3;
 
     public CompoundTag toTag() {
         CompoundTag tag = new CompoundTag();
@@ -27,9 +32,13 @@ public final class FarmDecorationConfig {
         tag.putString("waterFacing", waterFacing.getName());
         tag.putInt("waterOffsetX", waterOffsetX);
         tag.putInt("waterOffsetZ", waterOffsetZ);
+        tag.putInt("waterSpacing", waterSpacing);
         tag.putString("coverStyle", coverStyle.name());
         tag.putString("coverMaterial", coverMaterial.toString());
         tag.putString("coverFacing", coverFacing.getName());
+        tag.putString("scarecrowStyle", scarecrowStyle.name());
+        tag.putString("scarecrowFacing", scarecrowFacing.getName());
+        tag.putInt("scarecrowSpacing", scarecrowSpacing);
         return tag;
     }
 
@@ -42,9 +51,13 @@ public final class FarmDecorationConfig {
         config.waterFacing = readDirection(tag.getString("waterFacing"), Direction.NORTH);
         config.waterOffsetX = tag.getInt("waterOffsetX");
         config.waterOffsetZ = tag.getInt("waterOffsetZ");
+        config.waterSpacing = tag.contains("waterSpacing") ? clampSpacing(tag.getInt("waterSpacing")) : defaultSpacing(config.waterStyle);
         config.coverStyle = readEnum(CoverStyle.class, tag.getString("coverStyle"), CoverStyle.NONE);
         config.coverMaterial = readLocation(tag.getString("coverMaterial"), config.coverMaterial);
         config.coverFacing = readDirection(tag.getString("coverFacing"), Direction.NORTH);
+        config.scarecrowStyle = readEnum(ScarecrowStyle.class, tag.getString("scarecrowStyle"), ScarecrowStyle.NONE);
+        config.scarecrowFacing = readDirection(tag.getString("scarecrowFacing"), Direction.NORTH);
+        config.scarecrowSpacing = tag.contains("scarecrowSpacing") ? clampScarecrowSpacing(tag.getInt("scarecrowSpacing")) : 3;
         return config;
     }
 
@@ -64,6 +77,18 @@ public final class FarmDecorationConfig {
         } catch (IllegalArgumentException ex) {
             return fallback;
         }
+    }
+
+    public static int clampSpacing(int value) {
+        return Math.max(2, Math.min(8, value));
+    }
+
+    public static int defaultSpacing(WaterStyle style) {
+        return style == WaterStyle.CHANNELS ? 4 : 8;
+    }
+
+    public static int clampScarecrowSpacing(int value) {
+        return Math.max(3, Math.min(10, value));
     }
 
     public enum BorderStyle {
@@ -112,6 +137,22 @@ public final class FarmDecorationConfig {
         private final String displayName;
 
         CoverStyle(String displayName) {
+            this.displayName = displayName;
+        }
+
+        public String displayName() {
+            return displayName;
+        }
+    }
+
+    public enum ScarecrowStyle {
+        NONE("无"),
+        BLOCK_1("方块稻草人1"),
+        ARMOR_STAND_1("盔甲稻草人1");
+
+        private final String displayName;
+
+        ScarecrowStyle(String displayName) {
             this.displayName = displayName;
         }
 

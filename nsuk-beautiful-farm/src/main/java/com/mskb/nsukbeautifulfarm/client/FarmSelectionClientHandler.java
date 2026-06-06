@@ -234,7 +234,8 @@ public final class FarmSelectionClientHandler {
         gui.drawString(mc.font, "↑ / ↓: 切换材质", left, helpY + 38, 0xDDDDDD, true);
         gui.drawString(mc.font, "R: 旋转朝向", left, helpY + 50, 0xDDDDDD, true);
         gui.drawString(mc.font, "滚轮: 移动水装饰", left, helpY + 62, 0xDDDDDD, true);
-        gui.drawString(mc.font, "Alt: 脱离鼠标", left, helpY + 74, 0xDDDDDD, true);
+        gui.drawString(mc.font, "水/稻草人时 ↑ / ↓: 调整间隔", left, helpY + 74, 0xDDDDDD, true);
+        gui.drawString(mc.font, "Alt: 脱离鼠标", left, helpY + 86, 0xDDDDDD, true);
 
         int right = screen.width - 132;
         int y = 38;
@@ -355,7 +356,7 @@ public final class FarmSelectionClientHandler {
 
     private static boolean isLookingAtPhysicalPanel(Minecraft mc) {
         PanelHit hit = physicalPanelHit(mc);
-        return hit != null && hit.x >= -1.95D && hit.x <= 1.65D && hit.y >= -0.45D && hit.y <= 0.80D;
+        return hit != null && hit.x >= -1.95D && hit.x <= 1.65D && hit.y >= -0.70D && hit.y <= 0.80D;
     }
 
     private static PanelHit physicalPanelHit(Minecraft mc) {
@@ -384,7 +385,8 @@ public final class FarmSelectionClientHandler {
                 new PhysicalButton(PhysicalAction.FACING, -1.05D, -0.15D, 1.5D, 0.28D),
                 new PhysicalButton(PhysicalAction.BORDER, 0.85D, 0.55D, 1.3D, 0.28D),
                 new PhysicalButton(PhysicalAction.WATER, 0.85D, 0.20D, 1.3D, 0.28D),
-                new PhysicalButton(PhysicalAction.COVER, 0.85D, -0.15D, 1.3D, 0.28D)
+                new PhysicalButton(PhysicalAction.COVER, 0.85D, -0.15D, 1.3D, 0.28D),
+                new PhysicalButton(PhysicalAction.SCARECROW, 0.85D, -0.50D, 1.3D, 0.28D)
         );
     }
 
@@ -396,6 +398,7 @@ public final class FarmSelectionClientHandler {
             case BORDER -> selectedOption = DecorationOption.BORDER;
             case WATER -> selectedOption = DecorationOption.WATER;
             case COVER -> selectedOption = DecorationOption.WATER_COVER;
+            case SCARECROW -> selectedOption = DecorationOption.SCARECROW;
         }
     }
 
@@ -481,18 +484,24 @@ public final class FarmSelectionClientHandler {
                 config.borderStyle = cycle(FarmDecorationConfig.BorderStyle.values(), config.borderStyle, delta);
                 config.borderMaterial = materialsForBorder()[0];
             }
-            case WATER -> config.waterStyle = cycle(FarmDecorationConfig.WaterStyle.values(), config.waterStyle, delta);
+            case WATER -> {
+                config.waterStyle = cycle(FarmDecorationConfig.WaterStyle.values(), config.waterStyle, delta);
+                config.waterSpacing = FarmDecorationConfig.defaultSpacing(config.waterStyle);
+            }
             case WATER_COVER -> {
                 config.coverStyle = cycle(FarmDecorationConfig.CoverStyle.values(), config.coverStyle, delta);
                 config.coverMaterial = materialsForCover()[0];
             }
+            case SCARECROW -> config.scarecrowStyle = cycle(FarmDecorationConfig.ScarecrowStyle.values(), config.scarecrowStyle, delta);
         }
     }
 
     private static void changeMaterial(int delta) {
         switch (selectedOption) {
             case BORDER -> config.borderMaterial = cycle(materialsForBorder(), config.borderMaterial, delta);
+            case WATER -> config.waterSpacing = FarmDecorationConfig.clampSpacing(config.waterSpacing + delta);
             case WATER_COVER -> config.coverMaterial = cycle(materialsForCover(), config.coverMaterial, delta);
+            case SCARECROW -> config.scarecrowSpacing = FarmDecorationConfig.clampScarecrowSpacing(config.scarecrowSpacing + delta);
             default -> {
             }
         }
@@ -503,6 +512,7 @@ public final class FarmSelectionClientHandler {
             case BORDER -> config.borderFacing = config.borderFacing.getClockWise();
             case WATER -> config.waterFacing = config.waterFacing.getClockWise();
             case WATER_COVER -> config.coverFacing = config.coverFacing.getClockWise();
+            case SCARECROW -> config.scarecrowFacing = config.scarecrowFacing.getClockWise();
         }
     }
 
@@ -535,14 +545,16 @@ public final class FarmSelectionClientHandler {
             case BORDER -> config.borderStyle.displayName();
             case WATER -> config.waterStyle.displayName();
             case WATER_COVER -> config.coverStyle.displayName();
+            case SCARECROW -> config.scarecrowStyle.displayName();
         };
     }
 
     private static String materialName() {
         return switch (selectedOption) {
             case BORDER -> materialDisplayName(config.borderMaterial);
-            case WATER -> "无材质";
+            case WATER -> "间隔 " + FarmDecorationConfig.clampSpacing(config.waterSpacing);
             case WATER_COVER -> materialDisplayName(config.coverMaterial);
+            case SCARECROW -> "边距 " + FarmDecorationConfig.clampScarecrowSpacing(config.scarecrowSpacing);
         };
     }
 
@@ -551,6 +563,7 @@ public final class FarmSelectionClientHandler {
             case BORDER -> config.borderFacing;
             case WATER -> config.waterFacing;
             case WATER_COVER -> config.coverFacing;
+            case SCARECROW -> config.scarecrowFacing;
         };
         return directionDisplayName(direction);
     }
@@ -680,6 +693,7 @@ public final class FarmSelectionClientHandler {
                 case BORDER -> optionLabel(DecorationOption.BORDER);
                 case WATER -> optionLabel(DecorationOption.WATER);
                 case COVER -> optionLabel(DecorationOption.WATER_COVER);
+                case SCARECROW -> optionLabel(DecorationOption.SCARECROW);
             };
         }
     }
@@ -693,7 +707,8 @@ public final class FarmSelectionClientHandler {
         FACING,
         BORDER,
         WATER,
-        COVER
+        COVER,
+        SCARECROW
     }
 
 }

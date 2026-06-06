@@ -8,6 +8,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.FenceGateBlock;
 import net.minecraft.world.level.block.IronBarsBlock;
+import net.minecraft.world.level.block.PumpkinBlock;
 import net.minecraft.world.level.block.SlabBlock;
 import net.minecraft.world.level.block.TrapDoorBlock;
 import net.minecraft.world.level.block.WallBlock;
@@ -30,6 +31,7 @@ public final class DecorationPlanner {
         Map<BlockPos, BlockState> blocks = new LinkedHashMap<>();
         addWater(blocks, min, max, config);
         addCover(blocks, config);
+        addScarecrows(blocks, min, max, config);
         addBorder(blocks, min, max, config);
         return blocks.entrySet().stream().map(e -> new DecorationBlockPlan(e.getKey(), e.getValue())).toList();
     }
@@ -38,6 +40,37 @@ public final class DecorationPlanner {
         Map<BlockPos, BlockState> blocks = new LinkedHashMap<>();
         addWater(blocks, min, max, config);
         return List.copyOf(blocks.keySet());
+    }
+
+    public static List<BlockPos> scarecrowGroundPositions(BlockPos min, BlockPos max, FarmDecorationConfig config) {
+        if (config.scarecrowStyle == FarmDecorationConfig.ScarecrowStyle.NONE) {
+            return List.of();
+        }
+        int spacing = FarmDecorationConfig.clampScarecrowSpacing(config.scarecrowSpacing) + 1;
+        List<BlockPos> positions = new ArrayList<>();
+        for (int x = alignedStart(min.getX(), 0, spacing); x <= max.getX(); x += spacing) {
+            for (int z = alignedStart(min.getZ(), 0, spacing); z <= max.getZ(); z += spacing) {
+                BlockPos ground = new BlockPos(x, min.getY(), z);
+                if (fitsScarecrow(min, max, ground, config)) {
+                    positions.add(ground);
+                }
+            }
+        }
+        return positions;
+    }
+
+    private static boolean fitsScarecrow(BlockPos min, BlockPos max, BlockPos ground, FarmDecorationConfig config) {
+        if (config.scarecrowStyle != FarmDecorationConfig.ScarecrowStyle.BLOCK_1) {
+            return true;
+        }
+        Direction arm = config.scarecrowFacing.getClockWise();
+        BlockPos left = ground.relative(arm);
+        BlockPos right = ground.relative(arm.getOpposite());
+        return insideHorizontal(min, max, left) && insideHorizontal(min, max, right);
+    }
+
+    private static boolean insideHorizontal(BlockPos min, BlockPos max, BlockPos pos) {
+        return pos.getX() >= min.getX() && pos.getX() <= max.getX() && pos.getZ() >= min.getZ() && pos.getZ() <= max.getZ();
     }
 
     private static void addBorder(Map<BlockPos, BlockState> blocks, BlockPos min, BlockPos max, FarmDecorationConfig config) {
@@ -140,27 +173,93 @@ public final class DecorationPlanner {
         }
         BlockState water = Blocks.WATER.defaultBlockState();
         int y = min.getY();
+        int spacing = FarmDecorationConfig.clampSpacing(config.waterSpacing);
         if (config.waterStyle == FarmDecorationConfig.WaterStyle.CHANNELS) {
             boolean northSouth = config.waterFacing.getAxis() == Direction.Axis.Z;
             if (northSouth) {
-                int startX = alignedStart(min.getX(), config.waterOffsetX, 4);
-                for (int x = startX; x <= max.getX(); x += 4) {
+                for (int x : waterCoordinates(min.getX(), max.getX(), config.waterOffsetX, spacing, true)) {
                     for (int z = min.getZ(); z <= max.getZ(); z++) blocks.put(new BlockPos(x, y, z), water);
                 }
             } else {
-                int startZ = alignedStart(min.getZ(), config.waterOffsetZ, 4);
-                for (int z = startZ; z <= max.getZ(); z += 4) {
+                for (int z : waterCoordinates(min.getZ(), max.getZ(), config.waterOffsetZ, spacing, true)) {
                     for (int x = min.getX(); x <= max.getX(); x++) blocks.put(new BlockPos(x, y, z), water);
                 }
             }
             return;
         }
-        int startX = alignedStart(min.getX(), config.waterOffsetX, 8);
-        int startZ = alignedStart(min.getZ(), config.waterOffsetZ, 8);
-        for (int x = startX; x <= max.getX(); x += 8) {
-            for (int z = startZ; z <= max.getZ(); z += 8) {
+        List<Integer> xs = waterCoordinates(min.getX(), max.getX(), config.waterOffsetX, spacing, true);
+        List<Integer> zs = waterCoordinates(min.getZ(), max.getZ(), config.waterOffsetZ, spacing, true);
+        for (int x : xs) {
+            for (int z : zs) {
                 blocks.put(new BlockPos(x, y, z), water);
             }
+        }
+    }
+
+    private static void addScarecrows(Map<BlockPos, BlockState> blocks, BlockPos min, BlockPos max, FarmDecorationConfig config) {
+        if (config.scarecrowStyle == FarmDecorationConfig.ScarecrowStyle.NONE) {
+            return;
+        }
+        for (BlockPos ground : scarecrowGroundPositions(min, max, config)) {
+            if (config.scarecrowStyle == FarmDecorationConfig.ScarecrowStyle.BLOCK_1) {
+                addBlockScarecrow(blocks, ground, config.scarecrowFacing);
+            } else if (config.scarecrowStyle == FarmDecorationConfig.ScarecrowStyle.ARMOR_STAND_1) {
+                addArmorStandScarecrowBlocks(blocks, ground, config.scarecrowFacing);
+            }
+        }
+    }
+
+    private static void addBlockScarecrow(Map<BlockPos, BlockState> blocks, BlockPos ground, Direction facing) {
+        Direction arm = facing.getClockWise();
+        BlockPos body = ground.above(2);
+        blocks.put(ground.above(), Blocks.OAK_FENCE.defaultBlockState());
+        blocks.put(body, Blocks.HAY_BLOCK.defaultBlockState());
+        blocks.put(body.relative(arm), Blocks.OAK_FENCE.defaultBlockState());
+        blocks.put(body.relative(arm.getOpposite()), Blocks.OAK_FENCE.defaultBlockState());
+        BlockState pumpkin = Blocks.CARVED_PUMPKIN.defaultBlockState();
+        if (pumpkin.hasProperty(PumpkinBlock.FACING)) {
+            pumpkin = pumpkin.setValue(PumpkinBlock.FACING, facing);
+        }
+        blocks.put(ground.above(3), pumpkin);
+    }
+
+    private static void addArmorStandScarecrowBlocks(Map<BlockPos, BlockState> blocks, BlockPos ground, Direction facing) {
+        BlockState trapdoor = Blocks.OAK_TRAPDOOR.defaultBlockState();
+        if (trapdoor.hasProperty(TrapDoorBlock.FACING)) {
+            trapdoor = trapdoor.setValue(TrapDoorBlock.FACING, facing);
+        }
+        if (trapdoor.hasProperty(TrapDoorBlock.HALF)) {
+            trapdoor = trapdoor.setValue(TrapDoorBlock.HALF, Half.TOP);
+        }
+        blocks.put(ground.above(2), trapdoor);
+    }
+
+    private static List<Integer> waterCoordinates(int min, int max, int offset, int spacing, boolean addEdgeWater) {
+        List<Integer> values = new ArrayList<>();
+        int start = alignedStart(min, offset, spacing);
+        for (int coordinate = start; coordinate <= max; coordinate += spacing) {
+            addUnique(values, coordinate);
+        }
+        if (addEdgeWater && values.isEmpty()) {
+            addUnique(values, min);
+        }
+        if (addEdgeWater && !values.isEmpty()) {
+            int first = values.get(0);
+            int last = values.get(values.size() - 1);
+            if (first - min > 4) {
+                addUnique(values, min);
+            }
+            if (max - last > 4) {
+                addUnique(values, max);
+            }
+            values.sort(Integer::compareTo);
+        }
+        return values;
+    }
+
+    private static void addUnique(List<Integer> values, int coordinate) {
+        if (!values.contains(coordinate)) {
+            values.add(coordinate);
         }
     }
 

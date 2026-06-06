@@ -2,6 +2,7 @@ package com.mskb.nsukbeautifulfarm.server;
 
 import com.mskb.nsukbeautifulfarm.common.DecorationBlockPlan;
 import com.mskb.nsukbeautifulfarm.common.DecorationPlanner;
+import com.mskb.nsukbeautifulfarm.common.DecorationStateMatcher;
 import com.mskb.nsukbeautifulfarm.common.FarmDecorationConfig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
@@ -27,6 +28,7 @@ import java.util.Queue;
 public final class FarmDecorationServer {
     private static final Map<BlockPos, Queue<DecorationBlockPlan>> QUEUES = new HashMap<>();
     private static int tickCounter;
+    private static int buildSpeedAccumulator;
 
     private static Class<?> farmlandDataClass;
     private static Method getSelectedPlot;
@@ -48,12 +50,25 @@ public final class FarmDecorationServer {
         if (++tickCounter % 5 != 0) {
             return;
         }
+        int buildSteps = buildStepsThisCycle();
+        if (buildSteps <= 0) {
+            return;
+        }
         MinecraftServer server = event.getServer();
         for (ServerLevel level : server.getAllLevels()) {
             for (Map.Entry<BlockPos, FarmDecorationConfig> entry : FarmDecorationData.all().entrySet()) {
-                tickFarm(level, entry.getKey(), entry.getValue());
+                for (int i = 0; i < buildSteps; i++) {
+                    tickFarm(level, entry.getKey(), entry.getValue());
+                }
             }
         }
+    }
+
+    private static int buildStepsThisCycle() {
+        buildSpeedAccumulator += LenientFarmingServer.buildSpeedPercent();
+        int steps = buildSpeedAccumulator / 100;
+        buildSpeedAccumulator %= 100;
+        return Math.min(64, steps);
     }
 
     private static void tickFarm(ServerLevel level, BlockPos boxPos, FarmDecorationConfig config) {
@@ -70,6 +85,19 @@ public final class FarmDecorationServer {
             queue = new ArrayDeque<>(plan);
             QUEUES.put(boxPos, queue);
         }
+        PlotBounds bounds = getPlotBounds(boxPos);
+        if (bounds != null) {
+            if (ScarecrowServer.cleanupInvalid(level, boxPos, bounds.min, bounds.max, config)) {
+                return;
+            }
+            if (ScarecrowServer.hasUnsafeGround(level, bounds.min, bounds.max, config)) {
+                ScarecrowServer.maintainGroundOne(level, boxPos, bounds.min, bounds.max, config);
+                return;
+            }
+            if (ScarecrowServer.maintainOne(level, boxPos, bounds.min, bounds.max, config)) {
+                return;
+            }
+        }
         DecorationBlockPlan next = queue.poll();
         if (next == null) {
             QUEUES.remove(boxPos);
@@ -85,12 +113,12 @@ public final class FarmDecorationServer {
 
     private static void place(ServerLevel level, BlockPos chestPos, DecorationBlockPlan plan) {
         BlockState existing = level.getBlockState(plan.pos());
-        if (existing.equals(plan.state())) {
+        if (DecorationStateMatcher.isSatisfied(existing, plan.state())) {
             return;
         }
         if (!plan.state().is(Blocks.WATER) && plan.state().getBlock().asItem() != net.minecraft.world.item.Items.AIR) {
             ItemStack cost = new ItemStack(plan.state().getBlock().asItem());
-            if (!consume(level, chestPos, cost)) {
+            if (LenientFarmingServer.consumeMaterials() && !consume(level, chestPos, cost)) {
                 return;
             }
         }

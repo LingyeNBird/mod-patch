@@ -107,9 +107,13 @@ public final class FarmDecorationData {
         json.addProperty("waterFacing", config.waterFacing.getName());
         json.addProperty("waterOffsetX", config.waterOffsetX);
         json.addProperty("waterOffsetZ", config.waterOffsetZ);
+        json.addProperty("waterSpacing", config.waterSpacing);
         json.addProperty("coverStyle", config.coverStyle.name());
         json.addProperty("coverMaterial", config.coverMaterial.toString());
         json.addProperty("coverFacing", config.coverFacing.getName());
+        json.addProperty("scarecrowStyle", config.scarecrowStyle.name());
+        json.addProperty("scarecrowFacing", config.scarecrowFacing.getName());
+        json.addProperty("scarecrowSpacing", config.scarecrowSpacing);
         return json;
     }
 
@@ -122,9 +126,13 @@ public final class FarmDecorationData {
         config.waterFacing = direction(string(json, "waterFacing"), Direction.NORTH);
         config.waterOffsetX = integer(json, "waterOffsetX");
         config.waterOffsetZ = integer(json, "waterOffsetZ");
+        config.waterSpacing = json.has("waterSpacing") ? FarmDecorationConfig.clampSpacing(integer(json, "waterSpacing")) : FarmDecorationConfig.defaultSpacing(config.waterStyle);
         config.coverStyle = enumValue(FarmDecorationConfig.CoverStyle.class, string(json, "coverStyle"), FarmDecorationConfig.CoverStyle.NONE);
         config.coverMaterial = location(string(json, "coverMaterial"), config.coverMaterial);
         config.coverFacing = direction(string(json, "coverFacing"), Direction.NORTH);
+        config.scarecrowStyle = enumValue(FarmDecorationConfig.ScarecrowStyle.class, string(json, "scarecrowStyle"), FarmDecorationConfig.ScarecrowStyle.NONE);
+        config.scarecrowFacing = direction(string(json, "scarecrowFacing"), Direction.NORTH);
+        config.scarecrowSpacing = json.has("scarecrowSpacing") ? FarmDecorationConfig.clampScarecrowSpacing(integer(json, "scarecrowSpacing")) : 3;
         return config;
     }
 

@@ -2,6 +2,7 @@ package com.mskb.nsukbeautifulfarm.server;
 
 import com.mskb.nsukbeautifulfarm.common.DecorationBlockPlan;
 import com.mskb.nsukbeautifulfarm.common.DecorationPlanner;
+import com.mskb.nsukbeautifulfarm.common.DecorationStateMatcher;
 import com.mskb.nsukbeautifulfarm.common.FarmDecorationConfig;
 import com.mskb.nsukbeautifulfarm.config.BeautifulFarmConfig;
 import net.minecraft.core.BlockPos;
@@ -34,7 +35,6 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.ChestType;
 import net.minecraft.world.level.block.state.properties.IntegerProperty;
-import net.minecraft.world.level.block.state.properties.Property;
 import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraftforge.common.capabilities.ForgeCapabilities;
 import net.minecraftforge.event.TickEvent;
@@ -57,7 +57,11 @@ public final class LenientFarmingServer {
     private static final String WORK_DATA_ID = "nsukbeautifulfarm_work";
     private static final Map<WorkKey, WorkState> WORK = new HashMap<>();
     private static final Map<WorkKey, HarvestJob> HARVEST_JOBS = new HashMap<>();
+    private static final int DEFAULT_BUILD_SPEED_PERCENT = 100;
     private static int tickCounter;
+    private static int buildSpeedPercent = DEFAULT_BUILD_SPEED_PERCENT;
+    private static int buildSpeedAccumulator;
+    private static boolean consumeMaterials = true;
     private static MinecraftServer loadedServer;
 
     private static Class<?> farmlandDataClass;
@@ -221,6 +225,7 @@ public final class LenientFarmingServer {
         FarmDecorationConfig config = FarmDecorationData.get(boxPos);
 
         if (bounds != null) {
+            ScarecrowServer.removeAll(level, boxPos);
             if (config != null) {
                 for (DecorationBlockPlan plan : DecorationPlanner.plan(bounds.min, bounds.max, config)) {
                     breakAndStore(level, chestPos, plan.pos());
@@ -279,6 +284,7 @@ public final class LenientFarmingServer {
         if (++tickCounter % workIntervalTicks() != 0) {
             return;
         }
+        int buildSteps = buildStepsThisCycle();
         for (ServerLevel level : server.getAllLevels()) {
             for (WorkState state : List.copyOf(WORK.values())) {
                 if (!state.dimension.equals(level.dimension().location().toString())) {
@@ -300,12 +306,43 @@ public final class LenientFarmingServer {
                     HARVEST_JOBS.remove(key);
                     continue;
                 }
+                if (buildSteps <= 0) {
+                    continue;
+                }
                 if (!isFarmerAbleToWork(server, state.boxPos)) {
                     continue;
                 }
-                tickWork(level, state);
+                for (int i = 0; i < buildSteps; i++) {
+                    tickWork(level, state);
+                }
             }
         }
+    }
+
+    public static int buildSpeedPercent() {
+        return buildSpeedPercent;
+    }
+
+    public static int setBuildSpeedPercent(int percent) {
+        buildSpeedPercent = Math.max(10, Math.min(1600, percent));
+        buildSpeedAccumulator = 0;
+        return buildSpeedPercent;
+    }
+
+    public static boolean consumeMaterials() {
+        return consumeMaterials;
+    }
+
+    public static boolean setConsumeMaterials(boolean consume) {
+        consumeMaterials = consume;
+        return consumeMaterials;
+    }
+
+    private static int buildStepsThisCycle() {
+        buildSpeedAccumulator += buildSpeedPercent;
+        int steps = buildSpeedAccumulator / DEFAULT_BUILD_SPEED_PERCENT;
+        buildSpeedAccumulator %= DEFAULT_BUILD_SPEED_PERCENT;
+        return Math.min(64, steps);
     }
 
     private static void keepFarmlandMoist(ServerLevel level, WorkState state) {
@@ -378,7 +415,13 @@ public final class LenientFarmingServer {
 
     private static boolean replaceOne(ServerLevel level, WorkState state) {
         Set<BlockPos> water = waterPositions(state);
+        Set<BlockPos> reserved = scarecrowGroundPositions(state);
         for (BlockPos base : state.bounds.positions()) {
+            if (reserved.contains(base)) {
+                if (!water.contains(base)) {
+                    continue;
+                }
+            }
             if (water.contains(base)) {
                 if (!isWaterSatisfied(level.getBlockState(base))) {
                     level.setBlock(base, Blocks.WATER.defaultBlockState(), 3);
@@ -406,6 +449,21 @@ public final class LenientFarmingServer {
         if (config == null) {
             return false;
         }
+        if (ScarecrowServer.cleanupInvalid(level, state.boxPos, state.bounds.min, state.bounds.max, config)) {
+            state.idleTicks = 0;
+            return true;
+        }
+        if (ScarecrowServer.hasUnsafeGround(level, state.bounds.min, state.bounds.max, config)) {
+            if (ScarecrowServer.maintainGroundOne(level, state.boxPos, state.bounds.min, state.bounds.max, config)) {
+                state.idleTicks = 0;
+                return true;
+            }
+            return false;
+        }
+        if (ScarecrowServer.maintainOne(level, state.boxPos, state.bounds.min, state.bounds.max, config)) {
+            state.idleTicks = 0;
+            return true;
+        }
         List<DecorationBlockPlan> plans = DecorationPlanner.plan(state.bounds.min, state.bounds.max, config);
         for (DecorationBlockPlan plan : plans) {
             BlockState existing = level.getBlockState(plan.pos());
@@ -431,8 +489,9 @@ public final class LenientFarmingServer {
 
     private static boolean plantOne(ServerLevel level, WorkState state) {
         Set<BlockPos> water = waterPositions(state);
+        Set<BlockPos> reserved = scarecrowGroundPositions(state);
         for (BlockPos base : state.bounds.positions()) {
-            if (water.contains(base) || !shouldPlantAt(state.bounds, base, state.crop.checkerboard)) {
+            if (water.contains(base) || reserved.contains(base) || !shouldPlantAt(state.bounds, base, state.crop.checkerboard)) {
                 continue;
             }
             BlockState soil = level.getBlockState(base);
@@ -476,6 +535,13 @@ public final class LenientFarmingServer {
                 player.displayClientMessage(Component.literal("美丽农田：装饰还需要 " + missing + " 个 " + stack.getHoverName().getString() + "。"), false);
             }
         }
+        for (Map.Entry<ItemNeedKey, Integer> entry : needs.items.entrySet()) {
+            ItemStack stack = new ItemStack(entry.getKey().item());
+            int missing = Math.max(0, entry.getValue() - countNearbyItem(level, state.boxPos, stack));
+            if (missing > 0) {
+                player.displayClientMessage(Component.literal("美丽农田：装饰还需要 " + missing + " 个 " + stack.getHoverName().getString() + "。"), false);
+            }
+        }
         int seedMissing = Math.max(0, needs.seeds - countNearbyItem(level, state.boxPos, new ItemStack(state.crop.seed)));
         if (seedMissing > 0) {
             player.displayClientMessage(Component.literal("美丽农田：种植还需要 " + seedMissing + " 个 " + state.crop.seed.getDescription().getString() + "。"), false);
@@ -485,14 +551,16 @@ public final class LenientFarmingServer {
     private static Needs computeNeeds(ServerLevel level, WorkState state) {
         Needs needs = new Needs();
         Set<BlockPos> water = waterPositions(state);
+        Set<BlockPos> reserved = scarecrowGroundPositions(state);
         for (BlockPos base : state.bounds.positions()) {
-            if (!water.contains(base)) {
+            if (!water.contains(base) && !reserved.contains(base)) {
                 BlockState existing = level.getBlockState(base);
                 if (!existing.is(Blocks.DIRT) && !isFreeDirtEquivalent(existing)) {
                     needs.dirt++;
                 }
             }
             if (!water.contains(base)
+                    && !reserved.contains(base)
                     && level.getBlockState(base).getBlock() instanceof FarmBlock
                     && shouldPlantAt(state.bounds, base, state.crop.checkerboard)
                     && level.getBlockState(base.above()).isAir()) {
@@ -501,6 +569,14 @@ public final class LenientFarmingServer {
         }
         FarmDecorationConfig config = FarmDecorationData.get(state.boxPos);
         if (config != null) {
+            for (BlockPos ground : DecorationPlanner.scarecrowGroundPositions(state.bounds.min, state.bounds.max, config)) {
+                if (ScarecrowServer.isUnsafeGround(level, ground, state.bounds.min, state.bounds.max, config)) {
+                    needs.materials.merge(new MaterialNeedKey(Blocks.DIRT.defaultBlockState()), 1, Integer::sum);
+                }
+            }
+            for (Map.Entry<Item, Integer> entry : ScarecrowServer.itemNeeds(level, state.boxPos, state.bounds.min, state.bounds.max, config).entrySet()) {
+                needs.items.merge(new ItemNeedKey(entry.getKey()), entry.getValue(), Integer::sum);
+            }
             for (DecorationBlockPlan plan : DecorationPlanner.plan(state.bounds.min, state.bounds.max, config)) {
                 if (isDecorationSatisfied(level.getBlockState(plan.pos()), plan.state())) {
                     continue;
@@ -516,7 +592,7 @@ public final class LenientFarmingServer {
 
     private static boolean isComplete(ServerLevel level, WorkState state) {
         Needs needs = computeNeeds(level, state);
-        return needs.dirt == 0 && needs.seeds == 0 && needs.materials.isEmpty();
+        return needs.dirt == 0 && needs.seeds == 0 && needs.materials.isEmpty() && needs.items.isEmpty();
     }
 
     private static boolean isPartiallyStarted(ServerLevel level, PlotBounds bounds) {
@@ -534,35 +610,7 @@ public final class LenientFarmingServer {
     }
 
     private static boolean isDecorationSatisfied(BlockState existing, BlockState target) {
-        if (existing.equals(target)) {
-            return true;
-        }
-        if (!existing.is(target.getBlock())) {
-            return false;
-        }
-        for (var property : target.getProperties()) {
-            if (!existing.hasProperty(property)) {
-                continue;
-            }
-            if (isIgnoredDecorationProperty(property)) {
-                continue;
-            }
-            if (!existing.getValue(property).equals(target.getValue(property))) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static boolean isIgnoredDecorationProperty(Property<?> property) {
-        String name = property.getName();
-        return property == BlockStateProperties.POWERED
-                || property == BlockStateProperties.OPEN
-                || name.equals("north")
-                || name.equals("east")
-                || name.equals("south")
-                || name.equals("west")
-                || name.equals("up");
+        return DecorationStateMatcher.isSatisfied(existing, target);
     }
 
     private static void breakAndStore(ServerLevel level, BlockPos chestPos, BlockPos pos) {
@@ -645,6 +693,22 @@ public final class LenientFarmingServer {
             return Set.of();
         }
         return new HashSet<>(DecorationPlanner.waterPositions(state.bounds.min, state.bounds.max, config));
+    }
+
+    private static Set<BlockPos> scarecrowGroundPositions(WorkState state) {
+        FarmDecorationConfig config = FarmDecorationData.get(state.boxPos);
+        if (config == null) {
+            return Set.of();
+        }
+        return new HashSet<>(DecorationPlanner.scarecrowGroundPositions(state.bounds.min, state.bounds.max, config));
+    }
+
+    public static boolean consumeDecorationItem(ServerLevel level, BlockPos boxPos, ItemStack cost) {
+        return !consumeMaterials || cost.isEmpty() || consumeNearbyItem(level, boxPos, cost);
+    }
+
+    public static boolean hasDecorationItem(ServerLevel level, BlockPos boxPos, ItemStack cost) {
+        return !consumeMaterials || cost.isEmpty() || countNearbyItem(level, boxPos, cost) >= cost.getCount();
     }
 
     private static ItemStack costFor(BlockState state) {
@@ -1217,6 +1281,9 @@ public final class LenientFarmingServer {
     }
 
     private static boolean consumeNearbyItem(ServerLevel level, BlockPos boxPos, ItemStack cost) {
+        if (!consumeMaterials) {
+            return true;
+        }
         for (BlockPos chestPos : nearbyContainers(level, boxPos)) {
             if (consume(level, chestPos, cost.copy())) {
                 return true;
@@ -1226,6 +1293,9 @@ public final class LenientFarmingServer {
     }
 
     private static boolean consumeNearbyBuildingMaterial(ServerLevel level, BlockPos boxPos, BlockState targetState) {
+        if (!consumeMaterials) {
+            return true;
+        }
         for (BlockPos chestPos : nearbyContainers(level, boxPos)) {
             if (consumeBuildingMaterial(level, chestPos, targetState)) {
                 return true;
@@ -1235,6 +1305,9 @@ public final class LenientFarmingServer {
     }
 
     private static int countNearbyItem(ServerLevel level, BlockPos boxPos, ItemStack template) {
+        if (!consumeMaterials) {
+            return Integer.MAX_VALUE / 4;
+        }
         int count = 0;
         for (BlockPos chestPos : nearbyContainers(level, boxPos)) {
             count += countItem(level, chestPos, template);
@@ -1243,6 +1316,9 @@ public final class LenientFarmingServer {
     }
 
     private static int countNearbyBuildingMaterial(ServerLevel level, BlockPos boxPos, BlockState targetState) {
+        if (!consumeMaterials) {
+            return Integer.MAX_VALUE / 4;
+        }
         int count = 0;
         for (BlockPos chestPos : nearbyContainers(level, boxPos)) {
             count += countBuildingMaterial(level, chestPos, targetState);
@@ -1841,6 +1917,7 @@ public final class LenientFarmingServer {
         private int dirt;
         private int seeds;
         private final Map<MaterialNeedKey, Integer> materials = new LinkedHashMap<>();
+        private final Map<ItemNeedKey, Integer> items = new LinkedHashMap<>();
     }
 
     private enum HarvestKind {
@@ -2010,6 +2087,9 @@ public final class LenientFarmingServer {
     }
 
     private record MaterialNeedKey(BlockState state) {
+    }
+
+    private record ItemNeedKey(Item item) {
     }
 
     static final class PlotBounds {
