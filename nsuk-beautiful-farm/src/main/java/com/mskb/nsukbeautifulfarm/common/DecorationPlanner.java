@@ -7,8 +7,8 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.FenceGateBlock;
+import net.minecraft.world.level.block.HorizontalDirectionalBlock;
 import net.minecraft.world.level.block.IronBarsBlock;
-import net.minecraft.world.level.block.PumpkinBlock;
 import net.minecraft.world.level.block.SlabBlock;
 import net.minecraft.world.level.block.TrapDoorBlock;
 import net.minecraft.world.level.block.WallBlock;
@@ -217,8 +217,8 @@ public final class DecorationPlanner {
         blocks.put(body.relative(arm), Blocks.OAK_FENCE.defaultBlockState());
         blocks.put(body.relative(arm.getOpposite()), Blocks.OAK_FENCE.defaultBlockState());
         BlockState pumpkin = Blocks.CARVED_PUMPKIN.defaultBlockState();
-        if (pumpkin.hasProperty(PumpkinBlock.FACING)) {
-            pumpkin = pumpkin.setValue(PumpkinBlock.FACING, facing);
+        if (pumpkin.hasProperty(HorizontalDirectionalBlock.FACING)) {
+            pumpkin = pumpkin.setValue(HorizontalDirectionalBlock.FACING, facing);
         }
         blocks.put(ground.above(3), pumpkin);
     }
