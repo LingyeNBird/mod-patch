@@ -83,7 +83,7 @@ public final class LenientFarmingServer {
     }
 
     public static boolean isManaged(BlockPos boxPos) {
-        return WORK.keySet().stream().anyMatch(key -> key.boxPos.equals(boxPos));
+        return WORK.keySet().stream().anyMatch(key -> key.boxPos().equals(boxPos));
     }
 
     public static boolean isManaged(ServerLevel level, BlockPos boxPos) {
