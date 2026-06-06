@@ -7,16 +7,19 @@ import com.mskb.nsukbeautifulfarm.common.DecorationOption;
 import com.mskb.nsukbeautifulfarm.common.DecorationPlanner;
 import com.mskb.nsukbeautifulfarm.common.FarmDecorationConfig;
 import com.mskb.nsukbeautifulfarm.network.BeautifulFarmNetwork;
+import com.mskb.nsukbeautifulfarm.network.FarmWorkControlPacket;
 import com.mskb.nsukbeautifulfarm.network.SaveFarmDecorationPacket;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -29,6 +32,7 @@ import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.lwjgl.glfw.GLFW;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.List;
 
@@ -45,10 +49,64 @@ public final class FarmSelectionClientHandler {
     private static Method getPoint1;
     private static Method getPoint2;
     private static Method getMode;
+    private static Field selectCropButtonField;
+    private static Field selectAreaButtonField;
+    private static Field startFarmingButtonField;
     private static boolean physicalUiActive;
     private static PhysicalUi physicalUi;
+    private static BlockPos lastControlBoxPos;
 
     private FarmSelectionClientHandler() {
+    }
+
+    @SubscribeEvent
+    public static void onScreenInit(ScreenEvent.Init.Post event) {
+        Screen screen = event.getScreen();
+        if (!isFarmlandBoxScreen(screen)) {
+            return;
+        }
+        BlockPos boxPos = screenBoxPos(screen);
+        if (boxPos == null) {
+            return;
+        }
+        if (!boxPos.equals(lastControlBoxPos)) {
+            lastControlBoxPos = boxPos;
+        }
+        int x = screen.width - 85;
+        liftOriginalRightButtons(screen);
+        int y = screen.height - 60;
+        Button pauseButton = Button.builder(Component.literal("暂停/继续"), button -> {
+                    BeautifulFarmNetwork.CHANNEL.sendToServer(new FarmWorkControlPacket(boxPos, FarmWorkControlPacket.Action.TOGGLE_PAUSE));
+                })
+                .bounds(x, y, 80, 20)
+                .build();
+        Button stopButton = Button.builder(Component.literal("终止耕种"), button -> {
+                    BeautifulFarmNetwork.CHANNEL.sendToServer(new FarmWorkControlPacket(boxPos, FarmWorkControlPacket.Action.STOP));
+                    button.active = false;
+                })
+                .bounds(x, y + 25, 80, 20)
+                .build();
+        event.addListener(pauseButton);
+        event.addListener(stopButton);
+    }
+
+    private static void liftOriginalRightButtons(Screen screen) {
+        moveButton(screen, selectCropButtonField(), -50);
+        moveButton(screen, selectAreaButtonField(), -50);
+        moveButton(screen, startFarmingButtonField(), -50);
+    }
+
+    private static void moveButton(Screen screen, Field field, int deltaY) {
+        if (field == null) {
+            return;
+        }
+        try {
+            Object value = field.get(screen);
+            if (value instanceof Button button) {
+                button.setY(button.getY() + deltaY);
+            }
+        } catch (IllegalAccessException ignored) {
+        }
     }
 
     @SubscribeEvent
@@ -378,6 +436,10 @@ public final class FarmSelectionClientHandler {
         }
     }
 
+    private static boolean isFarmlandBoxScreen(Screen screen) {
+        return screen != null && "com.xiaoliang.simukraft.client.gui.FarmlandBoxScreen".equals(screen.getClass().getName());
+    }
+
     private static boolean hasBothPoints() {
         return point(1) != null && point(2) != null;
     }
@@ -391,8 +453,16 @@ public final class FarmSelectionClientHandler {
     }
 
     private static BlockPos screenBoxPos(Screen screen) {
+        BlockPos farmlandBoxPos = screenBlockPos(screen, "farmlandBoxPos");
+        if (farmlandBoxPos != null) {
+            return farmlandBoxPos;
+        }
+        return screenBlockPos(screen, "buildBoxPos");
+    }
+
+    private static BlockPos screenBlockPos(Screen screen, String fieldName) {
         try {
-            var field = screen.getClass().getDeclaredField("buildBoxPos");
+            var field = screen.getClass().getDeclaredField(fieldName);
             field.setAccessible(true);
             return (BlockPos) field.get(screen);
         } catch (ReflectiveOperationException | LinkageError ignored) {
@@ -568,6 +638,31 @@ public final class FarmSelectionClientHandler {
     private static Method getModeMethod() throws ReflectiveOperationException {
         if (getMode == null) getMode = managerClass().getMethod("getMode");
         return getMode;
+    }
+
+    private static Field selectCropButtonField() {
+        if (selectCropButtonField == null) selectCropButtonField = farmlandBoxButtonField("selectCropButton");
+        return selectCropButtonField;
+    }
+
+    private static Field selectAreaButtonField() {
+        if (selectAreaButtonField == null) selectAreaButtonField = farmlandBoxButtonField("selectAreaButton");
+        return selectAreaButtonField;
+    }
+
+    private static Field startFarmingButtonField() {
+        if (startFarmingButtonField == null) startFarmingButtonField = farmlandBoxButtonField("startFarmingButton");
+        return startFarmingButtonField;
+    }
+
+    private static Field farmlandBoxButtonField(String name) {
+        try {
+            Field field = Class.forName("com.xiaoliang.simukraft.client.gui.FarmlandBoxScreen").getDeclaredField(name);
+            field.setAccessible(true);
+            return field;
+        } catch (ReflectiveOperationException | LinkageError e) {
+            return null;
+        }
     }
 
     private record PhysicalUi(Vec3 origin, Vec3 normal, Vec3 right, Vec3 up) {

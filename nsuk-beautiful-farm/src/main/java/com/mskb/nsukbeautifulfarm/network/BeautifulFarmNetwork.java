@@ -6,7 +6,7 @@ import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.simple.SimpleChannel;
 
 public final class BeautifulFarmNetwork {
-    private static final String PROTOCOL = "1";
+    private static final String PROTOCOL = "2";
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             new ResourceLocation(NSUKBeautifulFarmPatch.MOD_ID, "main"),
             () -> PROTOCOL,
@@ -20,5 +20,6 @@ public final class BeautifulFarmNetwork {
     public static void register() {
         int id = 0;
         CHANNEL.registerMessage(id++, SaveFarmDecorationPacket.class, SaveFarmDecorationPacket::encode, SaveFarmDecorationPacket::decode, SaveFarmDecorationPacket::handle);
+        CHANNEL.registerMessage(id++, FarmWorkControlPacket.class, FarmWorkControlPacket::encode, FarmWorkControlPacket::decode, FarmWorkControlPacket::handle);
     }
 }

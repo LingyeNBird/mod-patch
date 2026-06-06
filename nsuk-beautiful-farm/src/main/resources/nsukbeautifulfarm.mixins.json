@@ -7,7 +7,9 @@
     "FarmerWorkServiceMixin",
     "FarmlandManagerMixin"
   ],
-  "client": [],
+  "client": [
+    "FarmlandBoxScreenMixin"
+  ],
   "injectors": {
     "defaultRequire": 1
   }

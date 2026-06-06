@@ -17,4 +17,11 @@ public abstract class FarmerWorkServiceMixin {
             ci.cancel();
         }
     }
+
+    @Inject(method = "boostCropGrowth", at = @At("HEAD"), cancellable = true, remap = false)
+    private void nsukbeautifulfarm$skipGrowthWhilePaused(@Coerce Object npc, BlockPos farmlandBoxPos, ServerLevel level, CallbackInfo ci) {
+        if (LenientFarmingServer.isPaused(level, farmlandBoxPos)) {
+            ci.cancel();
+        }
+    }
 }

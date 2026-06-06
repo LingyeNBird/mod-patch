@@ -57,7 +57,7 @@ public final class FarmDecorationServer {
     }
 
     private static void tickFarm(ServerLevel level, BlockPos boxPos, FarmDecorationConfig config) {
-        if (LenientFarmingServer.isManaged(boxPos)) {
+        if (LenientFarmingServer.isManaged(level, boxPos)) {
             return;
         }
         Queue<DecorationBlockPlan> queue = QUEUES.get(boxPos);

@@ -7,6 +7,9 @@ import com.mskb.nsukbeautifulfarm.config.BeautifulFarmConfig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
@@ -32,10 +35,12 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.ChestType;
 import net.minecraft.world.level.block.state.properties.IntegerProperty;
 import net.minecraft.world.level.block.state.properties.Property;
+import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraftforge.common.capabilities.ForgeCapabilities;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.items.IItemHandler;
+import net.minecraftforge.registries.ForgeRegistries;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
@@ -49,9 +54,11 @@ import java.util.Queue;
 import java.util.Set;
 
 public final class LenientFarmingServer {
-    private static final Map<BlockPos, WorkState> WORK = new HashMap<>();
-    private static final Map<BlockPos, HarvestJob> HARVEST_JOBS = new HashMap<>();
+    private static final String WORK_DATA_ID = "nsukbeautifulfarm_work";
+    private static final Map<WorkKey, WorkState> WORK = new HashMap<>();
+    private static final Map<WorkKey, HarvestJob> HARVEST_JOBS = new HashMap<>();
     private static int tickCounter;
+    private static MinecraftServer loadedServer;
 
     private static Class<?> farmlandDataClass;
     private static Method loadAllFarmlandData;
@@ -60,6 +67,9 @@ public final class LenientFarmingServer {
     private static Method setSelectedPlot;
     private static Method setSelectedArea;
     private static Method setSelectedCrop;
+    private static Method clearSelectedCrop;
+    private static Method clearSelectedArea;
+    private static Method clearSelectedPlot;
     private static Method getSelectedCrop;
     private static Method getHiredFarmer;
     private static Method findNpcByUuid;
@@ -67,12 +77,21 @@ public final class LenientFarmingServer {
     private static Method minPos;
     private static Method maxPos;
     private static Constructor<?> farmlandPlotConstructor;
+    private static Class<?> farmlandBoxBlockClass;
 
     private LenientFarmingServer() {
     }
 
     public static boolean isManaged(BlockPos boxPos) {
-        return WORK.containsKey(boxPos);
+        return WORK.keySet().stream().anyMatch(key -> key.boxPos.equals(boxPos));
+    }
+
+    public static boolean isManaged(ServerLevel level, BlockPos boxPos) {
+        if (level == null || boxPos == null) {
+            return false;
+        }
+        ensureWorkLoaded(level.getServer());
+        return WORK.containsKey(workKey(level, boxPos));
     }
 
     public static boolean shouldSkipHarvestBecauseOutputFull(ServerLevel level, BlockPos boxPos) {
@@ -86,27 +105,85 @@ public final class LenientFarmingServer {
         return !hasAnyInsertSpace(level, chestPos);
     }
 
+    public static boolean isPaused(ServerLevel level, BlockPos boxPos) {
+        if (level == null || boxPos == null) {
+            return false;
+        }
+        ensureWorkLoaded(level.getServer());
+        WorkState state = WORK.get(workKey(level, boxPos));
+        return state != null && state.paused;
+    }
+
+    public static void togglePaused(ServerPlayer player, BlockPos boxPos) {
+        if (player == null || boxPos == null) {
+            return;
+        }
+        ServerLevel level = player.serverLevel();
+        WorkKey key = workKey(level, boxPos);
+        if (!canControlWork(player, boxPos)) {
+            player.displayClientMessage(Component.literal("美丽农田：你离这个农田盒太远，无法操作。"), false);
+            return;
+        }
+        ensureWorkLoaded(level.getServer());
+        WorkState state = WORK.get(key);
+        if (state == null) {
+            player.displayClientMessage(Component.literal("美丽农田：当前没有可暂停的耕种任务。"), false);
+            return;
+        }
+        boolean paused = !state.paused;
+        state.paused = paused;
+        HARVEST_JOBS.remove(key);
+        persistWork(level.getServer(), state);
+        player.displayClientMessage(Component.literal(paused ? "美丽农田：已暂停耕种维护，仍会保持湿润。" : "美丽农田：已继续耕种维护。"), false);
+    }
+
+    public static void stopWork(ServerPlayer player, BlockPos boxPos) {
+        if (player == null || boxPos == null) {
+            return;
+        }
+        ServerLevel level = player.serverLevel();
+        WorkKey key = workKey(level, boxPos);
+        if (!canControlWork(player, boxPos)) {
+            player.displayClientMessage(Component.literal("美丽农田：你离这个农田盒太远，无法操作。"), false);
+            return;
+        }
+        ensureWorkLoaded(level.getServer());
+        WORK.remove(key);
+        removePersistedWork(level.getServer(), key);
+        HARVEST_JOBS.remove(key);
+        clearOriginalFarmWork(level.getServer(), boxPos);
+        player.displayClientMessage(Component.literal("美丽农田：已终止耕种任务，农民雇佣关系保留。"), false);
+    }
+
     public static boolean harvestAndStore(ServerLevel level, BlockPos boxPos, Object npc) {
         if (level == null || boxPos == null) {
             return true;
         }
-        WorkState state = WORK.get(boxPos);
+        ensureWorkLoaded(level.getServer());
+        WorkKey key = workKey(level, boxPos);
+        WorkState state = WORK.get(key);
+        Queue<HarvestPlan> plans;
+        String dimension;
         if (state == null) {
+            loadData(level.getServer());
             PlotBounds bounds = getPlot(boxPos);
-            CropPlan crop = CropPlan.resolve(getCrop(boxPos));
-            if (crop == null) {
-                crop = CropPlan.resolve("wheat");
-            }
-            if (bounds == null || crop == null) {
+            if (bounds == null) {
                 return true;
             }
-            state = new WorkState(level.dimension().location().toString(), boxPos.immutable(), bounds, crop, true);
-        }
-        Queue<HarvestPlan> plans = collectHarvestPlans(level, state, npc);
-        if (!plans.isEmpty()) {
-            HARVEST_JOBS.put(boxPos.immutable(), new HarvestJob(state.dimension, boxPos.immutable(), plans));
+            plans = collectHarvestPlansWithoutWork(level, bounds, CropPlan.resolveStrict(getCrop(boxPos)), npc);
+            dimension = level.dimension().location().toString();
         } else {
-            HARVEST_JOBS.remove(boxPos);
+            if (state.paused) {
+                HARVEST_JOBS.remove(key);
+                return true;
+            }
+            plans = collectHarvestPlans(level, state, npc);
+            dimension = state.dimension;
+        }
+        if (!plans.isEmpty()) {
+            HARVEST_JOBS.put(new WorkKey(dimension, boxPos.immutable()), new HarvestJob(dimension, boxPos.immutable(), plans));
+        } else {
+            HARVEST_JOBS.remove(key);
         }
         return true;
     }
@@ -134,8 +211,11 @@ public final class LenientFarmingServer {
         if (level == null || boxPos == null) {
             return false;
         }
-        WorkState state = WORK.remove(boxPos);
-        HARVEST_JOBS.remove(boxPos);
+        ensureWorkLoaded(level.getServer());
+        WorkKey key = workKey(level, boxPos);
+        WorkState state = WORK.remove(key);
+        removePersistedWork(level.getServer(), key);
+        HARVEST_JOBS.remove(key);
         PlotBounds bounds = state != null ? state.bounds : getPlot(boxPos);
         BlockPos chestPos = findNearbyUsableChest(level, boxPos);
         FarmDecorationConfig config = FarmDecorationData.get(boxPos);
@@ -163,6 +243,7 @@ public final class LenientFarmingServer {
         }
         ServerLevel level = player.serverLevel();
         MinecraftServer server = level.getServer();
+        ensureWorkLoaded(server);
         loadData(server);
 
         CropPlan cropPlan = CropPlan.resolve(crop);
@@ -180,7 +261,8 @@ public final class LenientFarmingServer {
         setNpcWorking(server, boxPos);
 
         WorkState state = new WorkState(level.dimension().location().toString(), boxPos.immutable(), bounds, cropPlan, isPartiallyStarted(level, bounds));
-        WORK.put(boxPos.immutable(), state);
+        WORK.put(state.key(), state);
+        persistWork(server, state);
         saveData(server);
         sendNeeds(player, level, state, true);
         player.displayClientMessage(Component.literal("美丽农田：开始宽松耕种，坏格不会阻止开工。"), false);
@@ -192,6 +274,7 @@ public final class LenientFarmingServer {
             return;
         }
         MinecraftServer server = event.getServer();
+        ensureWorkLoaded(server);
         processHarvestJobs(server);
         if (++tickCounter % workIntervalTicks() != 0) {
             return;
@@ -201,14 +284,20 @@ public final class LenientFarmingServer {
                 if (!state.dimension.equals(level.dimension().location().toString())) {
                     continue;
                 }
-                if (level.getBlockState(state.boxPos).isAir()) {
-                    WORK.remove(state.boxPos);
-                    HARVEST_JOBS.remove(state.boxPos);
+                WorkKey key = state.key();
+                if (!isFarmlandBoxBlock(level.getBlockState(state.boxPos).getBlock())) {
+                    WORK.remove(key);
+                    removePersistedWork(server, key);
+                    HARVEST_JOBS.remove(key);
                     continue;
                 }
                 if (!hasHiredFarmer(state.boxPos)) {
-                    WORK.remove(state.boxPos);
-                    HARVEST_JOBS.remove(state.boxPos);
+                    HARVEST_JOBS.remove(key);
+                    continue;
+                }
+                keepFarmlandMoist(level, state);
+                if (state.paused) {
+                    HARVEST_JOBS.remove(key);
                     continue;
                 }
                 if (!isFarmerAbleToWork(server, state.boxPos)) {
@@ -219,12 +308,35 @@ public final class LenientFarmingServer {
         }
     }
 
+    private static void keepFarmlandMoist(ServerLevel level, WorkState state) {
+        Set<BlockPos> water = waterPositions(state);
+        for (BlockPos base : state.bounds.positions()) {
+            if (water.contains(base)) {
+                continue;
+            }
+            BlockState existing = level.getBlockState(base);
+            if (existing.getBlock() instanceof FarmBlock && existing.hasProperty(FarmBlock.MOISTURE) && existing.getValue(FarmBlock.MOISTURE) < 7) {
+                level.setBlock(base, existing.setValue(FarmBlock.MOISTURE, 7), 3);
+                return;
+            }
+        }
+    }
+
+    private static boolean canControlWork(ServerPlayer player, BlockPos boxPos) {
+        ServerLevel level = player.serverLevel();
+        if (!isFarmlandBoxBlock(level.getBlockState(boxPos).getBlock())) {
+            return false;
+        }
+        return player.distanceToSqr(boxPos.getX() + 0.5D, boxPos.getY() + 0.5D, boxPos.getZ() + 0.5D) <= 64.0D;
+    }
+
     private static void tickWork(ServerLevel level, WorkState state) {
         if (!state.maintenanceMode && !state.topCleared) {
             if (clearOne(level, state)) {
                 return;
             }
             state.topCleared = true;
+            persistWork(level.getServer(), state);
         }
         if (replaceOne(level, state)) {
             return;
@@ -236,7 +348,10 @@ public final class LenientFarmingServer {
             return;
         }
         if (isComplete(level, state)) {
-            state.maintenanceMode = true;
+            if (!state.maintenanceMode) {
+                state.maintenanceMode = true;
+                persistWork(level.getServer(), state);
+            }
             return;
         }
         if (++state.idleTicks >= Math.max(1, statusIntervalTicks() / workIntervalTicks())) {
@@ -568,15 +683,20 @@ public final class LenientFarmingServer {
                 if (!job.dimension.equals(level.dimension().location().toString())) {
                     continue;
                 }
-                if (level.getBlockState(job.boxPos).isAir()) {
-                    HARVEST_JOBS.remove(job.boxPos);
+                if (!isFarmlandBoxBlock(level.getBlockState(job.boxPos).getBlock())) {
+                    HARVEST_JOBS.remove(job.key());
                     continue;
                 }
                 if (!hasHiredFarmer(job.boxPos)) {
-                    HARVEST_JOBS.remove(job.boxPos);
+                    HARVEST_JOBS.remove(job.key());
                     continue;
                 }
                 if (!isFarmerAbleToWork(server, job.boxPos)) {
+                    continue;
+                }
+                WorkState state = WORK.get(job.key());
+                if (state != null && state.paused) {
+                    HARVEST_JOBS.remove(job.key());
                     continue;
                 }
                 while (processed < limit && !job.pending.isEmpty()) {
@@ -584,7 +704,7 @@ public final class LenientFarmingServer {
                     processed++;
                 }
                 if (job.pending.isEmpty()) {
-                    HARVEST_JOBS.remove(job.boxPos);
+                    HARVEST_JOBS.remove(job.key());
                 }
                 if (processed >= limit) {
                     return;
@@ -610,6 +730,32 @@ public final class LenientFarmingServer {
                 }
             } else {
                 plan = planRegularCrop(level, cropPos, cropState, state.crop, npc);
+            }
+            if (plan != null) {
+                plans.add(plan);
+            }
+        }
+        return plans;
+    }
+
+    private static Queue<HarvestPlan> collectHarvestPlansWithoutWork(ServerLevel level, PlotBounds bounds, CropPlan crop, Object npc) {
+        Queue<HarvestPlan> plans = new ArrayDeque<>();
+        Set<BlockPos> plannedStemFruit = new HashSet<>();
+        for (BlockPos base : bounds.positions()) {
+            BlockPos cropPos = base.above();
+            BlockState cropState = level.getBlockState(cropPos);
+            Block block = cropState.getBlock();
+            HarvestPlan plan = null;
+            // 没有持久化 WORK 时，复刻原模组 harvestAndReplant 的判断：右键作物按当前方块识别，普通/瓜类作物只按农田盒保存的 selectedCrop 处理。
+            if (isRightClickHarvestCrop(block)) {
+                plan = planRightClickCrop(level, cropPos, cropState);
+            } else if (crop != null && crop.cropBlock instanceof StemBlock) {
+                plan = planStemFruit(level, cropPos, crop.cropBlock);
+                if (plan != null && !plannedStemFruit.add(plan.pos)) {
+                    plan = null;
+                }
+            } else if (crop != null) {
+                plan = planRegularCrop(level, cropPos, cropState, crop, npc);
             }
             if (plan != null) {
                 plans.add(plan);
@@ -1393,6 +1539,46 @@ public final class LenientFarmingServer {
         return BeautifulFarmConfig.DROPPED_ITEM_PICKUP_DELAY_TICKS.get();
     }
 
+    private static void ensureWorkLoaded(MinecraftServer server) {
+        if (server == null || loadedServer == server) {
+            return;
+        }
+        loadedServer = server;
+        WORK.clear();
+        HARVEST_JOBS.clear();
+        workData(server).copyTo(WORK);
+    }
+
+    private static void persistWork(MinecraftServer server, WorkState state) {
+        if (server == null || state == null || loadedServer != server) {
+            return;
+        }
+        workData(server).put(state);
+    }
+
+    private static void removePersistedWork(MinecraftServer server, WorkKey key) {
+        if (server == null || loadedServer != server) {
+            return;
+        }
+        workData(server).remove(key);
+    }
+
+    private static WorkSavedData workData(MinecraftServer server) {
+        return server.overworld().getDataStorage().computeIfAbsent(WorkSavedData::load, WorkSavedData::new, WORK_DATA_ID);
+    }
+
+    private static WorkKey workKey(ServerLevel level, BlockPos boxPos) {
+        return new WorkKey(level.dimension().location().toString(), boxPos.immutable());
+    }
+
+    private static boolean isFarmlandBoxBlock(Block block) {
+        try {
+            return farmlandBoxBlockClass().isInstance(block);
+        } catch (ClassNotFoundException | LinkageError ignored) {
+            return false;
+        }
+    }
+
     private static void invalidateOriginalWorkflow(ServerLevel level, BlockPos boxPos) {
         try {
             Class<?> managerClass = Class.forName("com.xiaoliang.simukraft.utils.FarmlandManager");
@@ -1407,6 +1593,25 @@ public final class LenientFarmingServer {
             setSelectedCropMethod().invoke(null, boxPos, crop);
         } catch (ReflectiveOperationException | LinkageError ignored) {
         }
+    }
+
+    private static void clearOriginalFarmWork(MinecraftServer server, BlockPos boxPos) {
+        clearOriginalFarmField(() -> clearSelectedCropMethod().invoke(null, boxPos));
+        clearOriginalFarmField(() -> clearSelectedAreaMethod().invoke(null, boxPos));
+        clearOriginalFarmField(() -> clearSelectedPlotMethod().invoke(null, boxPos));
+        saveData(server);
+    }
+
+    private static void clearOriginalFarmField(ReflectiveAction action) {
+        try {
+            action.run();
+        } catch (ReflectiveOperationException | LinkageError ignored) {
+        }
+    }
+
+    @FunctionalInterface
+    private interface ReflectiveAction {
+        void run() throws ReflectiveOperationException;
     }
 
     private static String getCrop(BlockPos boxPos) {
@@ -1485,9 +1690,24 @@ public final class LenientFarmingServer {
         return setSelectedCrop;
     }
 
+    private static Method clearSelectedCropMethod() throws ReflectiveOperationException {
+        if (clearSelectedCrop == null) clearSelectedCrop = farmlandDataClass().getMethod("clearSelectedCrop", BlockPos.class);
+        return clearSelectedCrop;
+    }
+
     private static Method getSelectedCropMethod() throws ReflectiveOperationException {
         if (getSelectedCrop == null) getSelectedCrop = farmlandDataClass().getMethod("getSelectedCrop", BlockPos.class);
         return getSelectedCrop;
+    }
+
+    private static Method clearSelectedAreaMethod() throws ReflectiveOperationException {
+        if (clearSelectedArea == null) clearSelectedArea = farmlandDataClass().getMethod("clearSelectedArea", BlockPos.class);
+        return clearSelectedArea;
+    }
+
+    private static Method clearSelectedPlotMethod() throws ReflectiveOperationException {
+        if (clearSelectedPlot == null) clearSelectedPlot = farmlandDataClass().getMethod("clearSelectedPlot", BlockPos.class);
+        return clearSelectedPlot;
     }
 
     private static Method getHiredFarmerMethod() throws ReflectiveOperationException {
@@ -1514,21 +1734,106 @@ public final class LenientFarmingServer {
         return farmlandPlotConstructor;
     }
 
-    private static final class WorkState {
-        private final String dimension;
-        private final BlockPos boxPos;
-        private final PlotBounds bounds;
-        private final CropPlan crop;
-        private boolean topCleared;
-        private boolean maintenanceMode;
-        private int idleTicks;
+    private static Class<?> farmlandBoxBlockClass() throws ClassNotFoundException {
+        if (farmlandBoxBlockClass == null) {
+            farmlandBoxBlockClass = Class.forName("com.xiaoliang.simukraft.block.NSUKFarmlandBoxBlock");
+        }
+        return farmlandBoxBlockClass;
+    }
 
-        private WorkState(String dimension, BlockPos boxPos, PlotBounds bounds, CropPlan crop, boolean topCleared) {
-            this.dimension = dimension;
-            this.boxPos = boxPos;
-            this.bounds = bounds;
-            this.crop = crop;
-            this.topCleared = topCleared;
+    private static final class WorkSavedData extends SavedData {
+        private static final String TAG_WORK = "work";
+        private static final String TAG_DIMENSION = "dimension";
+        private static final String TAG_BOX_X = "boxX";
+        private static final String TAG_BOX_Y = "boxY";
+        private static final String TAG_BOX_Z = "boxZ";
+        private static final String TAG_MIN_X = "minX";
+        private static final String TAG_MIN_Y = "minY";
+        private static final String TAG_MIN_Z = "minZ";
+        private static final String TAG_MAX_X = "maxX";
+        private static final String TAG_MAX_Y = "maxY";
+        private static final String TAG_MAX_Z = "maxZ";
+        private static final String TAG_CROP = "crop";
+        private static final String TAG_TOP_CLEARED = "topCleared";
+        private static final String TAG_MAINTENANCE_MODE = "maintenanceMode";
+        private static final String TAG_PAUSED = "paused";
+        private static final String TAG_IDLE_TICKS = "idleTicks";
+
+        private final Map<WorkKey, WorkState> savedWork = new HashMap<>();
+
+        private static WorkSavedData load(CompoundTag tag) {
+            WorkSavedData data = new WorkSavedData();
+            ListTag list = tag.getList(TAG_WORK, Tag.TAG_COMPOUND);
+            for (int i = 0; i < list.size(); i++) {
+                WorkState state = readWorkState(list.getCompound(i));
+                if (state != null) {
+                    data.savedWork.put(state.key(), state);
+                }
+            }
+            return data;
+        }
+
+        @Override
+        public CompoundTag save(CompoundTag tag) {
+            ListTag list = new ListTag();
+            for (WorkState state : savedWork.values()) {
+                list.add(writeWorkState(state));
+            }
+            tag.put(TAG_WORK, list);
+            return tag;
+        }
+
+        private void copyTo(Map<WorkKey, WorkState> target) {
+            target.clear();
+            target.putAll(savedWork);
+        }
+
+        private void put(WorkState state) {
+            savedWork.put(state.key(), state);
+            setDirty();
+        }
+
+        private void remove(WorkKey key) {
+            if (savedWork.remove(key) != null) {
+                setDirty();
+            }
+        }
+
+        private static CompoundTag writeWorkState(WorkState state) {
+            CompoundTag tag = new CompoundTag();
+            tag.putString(TAG_DIMENSION, state.dimension);
+            tag.putInt(TAG_BOX_X, state.boxPos.getX());
+            tag.putInt(TAG_BOX_Y, state.boxPos.getY());
+            tag.putInt(TAG_BOX_Z, state.boxPos.getZ());
+            tag.putInt(TAG_MIN_X, state.bounds.min.getX());
+            tag.putInt(TAG_MIN_Y, state.bounds.min.getY());
+            tag.putInt(TAG_MIN_Z, state.bounds.min.getZ());
+            tag.putInt(TAG_MAX_X, state.bounds.max.getX());
+            tag.putInt(TAG_MAX_Y, state.bounds.max.getY());
+            tag.putInt(TAG_MAX_Z, state.bounds.max.getZ());
+            tag.putString(TAG_CROP, state.crop.selectionId);
+            tag.putBoolean(TAG_TOP_CLEARED, state.topCleared);
+            tag.putBoolean(TAG_MAINTENANCE_MODE, state.maintenanceMode);
+            tag.putBoolean(TAG_PAUSED, state.paused);
+            tag.putInt(TAG_IDLE_TICKS, state.idleTicks);
+            return tag;
+        }
+
+        private static WorkState readWorkState(CompoundTag tag) {
+            CropPlan crop = CropPlan.resolve(tag.getString(TAG_CROP));
+            if (crop == null || !tag.contains(TAG_DIMENSION)) {
+                return null;
+            }
+            BlockPos boxPos = new BlockPos(tag.getInt(TAG_BOX_X), tag.getInt(TAG_BOX_Y), tag.getInt(TAG_BOX_Z));
+            PlotBounds bounds = new PlotBounds(
+                    new BlockPos(tag.getInt(TAG_MIN_X), tag.getInt(TAG_MIN_Y), tag.getInt(TAG_MIN_Z)),
+                    new BlockPos(tag.getInt(TAG_MAX_X), tag.getInt(TAG_MAX_Y), tag.getInt(TAG_MAX_Z))
+            );
+            WorkState state = new WorkState(tag.getString(TAG_DIMENSION), boxPos, bounds, crop, tag.getBoolean(TAG_TOP_CLEARED));
+            state.maintenanceMode = tag.getBoolean(TAG_MAINTENANCE_MODE);
+            state.paused = tag.getBoolean(TAG_PAUSED);
+            state.idleTicks = tag.getInt(TAG_IDLE_TICKS);
+            return state;
         }
     }
 
@@ -1579,6 +1884,10 @@ public final class LenientFarmingServer {
             this.dimension = dimension;
             this.boxPos = boxPos;
             this.pending = pending;
+        }
+
+        private WorkKey key() {
+            return new WorkKey(dimension, boxPos);
         }
     }
 
@@ -1703,7 +2012,7 @@ public final class LenientFarmingServer {
     private record MaterialNeedKey(BlockState state) {
     }
 
-    private static final class PlotBounds {
+    static final class PlotBounds {
         private final BlockPos min;
         private final BlockPos max;
 
@@ -1742,7 +2051,7 @@ public final class LenientFarmingServer {
         }
     }
 
-    private static final class CropPlan {
+    static final class CropPlan {
         private final String selectionId;
         private final Item seed;
         private final Block cropBlock;
@@ -1756,13 +2065,26 @@ public final class LenientFarmingServer {
         }
 
         private static CropPlan resolve(String crop) {
-            String id = normalize(crop);
+            String id = normalize(crop, true);
+            return resolveNormalized(id);
+        }
+
+        private static CropPlan resolveStrict(String crop) {
+            String id = normalize(crop, false);
+            return resolveNormalized(id);
+        }
+
+        private static CropPlan resolveNormalized(String id) {
+            if (id == null) {
+                return null;
+            }
             ResourceLocation location = ResourceLocation.tryParse(id);
             if (location == null) {
                 return null;
             }
-            Item item = BuiltInRegistries.ITEM.get(location);
-            if (item == Items.AIR) {
+            // 这里复刻原模组 CropRegistry.resolve 的核心逻辑，避免没 WORK 时把未知模组作物错误回退成小麦。
+            Item item = ForgeRegistries.ITEMS.getValue(location);
+            if (item == null || item == Items.AIR) {
                 return null;
             }
             Block block = vanillaCropBlock(id);
@@ -1779,8 +2101,11 @@ public final class LenientFarmingServer {
             return new CropPlan(id, item, block, block instanceof StemBlock);
         }
 
-        private static String normalize(String crop) {
-            String value = crop == null || crop.isBlank() ? "wheat" : crop.trim().toLowerCase(java.util.Locale.ROOT);
+        private static String normalize(String crop, boolean defaultWheat) {
+            if (crop == null || crop.isBlank()) {
+                return defaultWheat ? "minecraft:wheat_seeds" : null;
+            }
+            String value = crop.trim().toLowerCase(java.util.Locale.ROOT);
             return switch (value) {
                 case "wheat" -> "minecraft:wheat_seeds";
                 case "carrot" -> "minecraft:carrot";
