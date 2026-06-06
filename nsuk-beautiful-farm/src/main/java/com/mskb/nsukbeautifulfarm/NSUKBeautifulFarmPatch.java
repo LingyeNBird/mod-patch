@@ -1,6 +1,7 @@
 package com.mskb.nsukbeautifulfarm;
 
 import com.mskb.nsukbeautifulfarm.client.BeautifulFarmClient;
+import com.mskb.nsukbeautifulfarm.config.BeautifulFarmConfig;
 import com.mskb.nsukbeautifulfarm.network.BeautifulFarmNetwork;
 import com.mskb.nsukbeautifulfarm.server.FarmDecorationData;
 import com.mskb.nsukbeautifulfarm.server.FarmDecorationServer;
@@ -9,7 +10,9 @@ import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.fml.DistExecutor;
+import net.minecraftforge.fml.ModLoadingContext;
 import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.config.ModConfig;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 
 @Mod(NSUKBeautifulFarmPatch.MOD_ID)
@@ -18,6 +21,7 @@ public final class NSUKBeautifulFarmPatch {
 
     public NSUKBeautifulFarmPatch() {
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
+        ModLoadingContext.get().registerConfig(ModConfig.Type.SERVER, BeautifulFarmConfig.SPEC);
         BeautifulFarmNetwork.register();
         MinecraftForge.EVENT_BUS.register(FarmDecorationData.class);
         MinecraftForge.EVENT_BUS.register(FarmDecorationServer.class);

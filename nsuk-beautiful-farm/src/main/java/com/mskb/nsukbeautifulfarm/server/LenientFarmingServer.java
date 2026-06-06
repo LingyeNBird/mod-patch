@@ -3,6 +3,7 @@ package com.mskb.nsukbeautifulfarm.server;
 import com.mskb.nsukbeautifulfarm.common.DecorationBlockPlan;
 import com.mskb.nsukbeautifulfarm.common.DecorationPlanner;
 import com.mskb.nsukbeautifulfarm.common.FarmDecorationConfig;
+import com.mskb.nsukbeautifulfarm.config.BeautifulFarmConfig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -43,12 +44,13 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayDeque;
+import java.util.Queue;
 import java.util.Set;
 
 public final class LenientFarmingServer {
-    private static final int WORK_INTERVAL_TICKS = 5;
-    private static final int STATUS_INTERVAL_TICKS = 200;
     private static final Map<BlockPos, WorkState> WORK = new HashMap<>();
+    private static final Map<BlockPos, HarvestJob> HARVEST_JOBS = new HashMap<>();
     private static int tickCounter;
 
     private static Class<?> farmlandDataClass;
@@ -100,17 +102,11 @@ public final class LenientFarmingServer {
             }
             state = new WorkState(level.dimension().location().toString(), boxPos.immutable(), bounds, crop, true);
         }
-        for (BlockPos base : state.bounds.positions()) {
-            BlockPos cropPos = base.above();
-            BlockState cropState = level.getBlockState(cropPos);
-            Block block = cropState.getBlock();
-            if (isRightClickHarvestCrop(block)) {
-                harvestRightClickCrop(level, boxPos, cropPos, cropState);
-            } else if (state.crop.cropBlock instanceof StemBlock) {
-                harvestStemFruit(level, boxPos, cropPos, state.crop.cropBlock);
-            } else {
-                harvestRegularCrop(level, boxPos, cropPos, cropState, state.crop, npc);
-            }
+        Queue<HarvestPlan> plans = collectHarvestPlans(level, state, npc);
+        if (!plans.isEmpty()) {
+            HARVEST_JOBS.put(boxPos.immutable(), new HarvestJob(state.dimension, boxPos.immutable(), plans));
+        } else {
+            HARVEST_JOBS.remove(boxPos);
         }
         return true;
     }
@@ -139,6 +135,7 @@ public final class LenientFarmingServer {
             return false;
         }
         WorkState state = WORK.remove(boxPos);
+        HARVEST_JOBS.remove(boxPos);
         PlotBounds bounds = state != null ? state.bounds : getPlot(boxPos);
         BlockPos chestPos = findNearbyUsableChest(level, boxPos);
         FarmDecorationConfig config = FarmDecorationData.get(boxPos);
@@ -194,10 +191,11 @@ public final class LenientFarmingServer {
         if (event.phase != TickEvent.Phase.END) {
             return;
         }
-        if (++tickCounter % WORK_INTERVAL_TICKS != 0) {
+        MinecraftServer server = event.getServer();
+        processHarvestJobs(server);
+        if (++tickCounter % workIntervalTicks() != 0) {
             return;
         }
-        MinecraftServer server = event.getServer();
         for (ServerLevel level : server.getAllLevels()) {
             for (WorkState state : List.copyOf(WORK.values())) {
                 if (!state.dimension.equals(level.dimension().location().toString())) {
@@ -205,10 +203,12 @@ public final class LenientFarmingServer {
                 }
                 if (level.getBlockState(state.boxPos).isAir()) {
                     WORK.remove(state.boxPos);
+                    HARVEST_JOBS.remove(state.boxPos);
                     continue;
                 }
                 if (!hasHiredFarmer(state.boxPos)) {
                     WORK.remove(state.boxPos);
+                    HARVEST_JOBS.remove(state.boxPos);
                     continue;
                 }
                 if (!isFarmerAbleToWork(server, state.boxPos)) {
@@ -239,7 +239,7 @@ public final class LenientFarmingServer {
             state.maintenanceMode = true;
             return;
         }
-        if (++state.idleTicks >= STATUS_INTERVAL_TICKS / WORK_INTERVAL_TICKS) {
+        if (++state.idleTicks >= Math.max(1, statusIntervalTicks() / workIntervalTicks())) {
             state.idleTicks = 0;
             ServerPlayer player = nearestPlayer(level, state.boxPos);
             if (player != null) {
@@ -478,7 +478,7 @@ public final class LenientFarmingServer {
                     dropPos.getZ() + 0.5D,
                     remaining
             );
-            itemEntity.setPickUpDelay(10);
+            itemEntity.setPickUpDelay(droppedItemPickupDelayTicks());
             level.addFreshEntity(itemEntity);
         }
     }
@@ -553,9 +553,74 @@ public final class LenientFarmingServer {
         return (dx + dz) % 2 == 0;
     }
 
-    private static void harvestRightClickCrop(ServerLevel level, BlockPos boxPos, BlockPos pos, BlockState state) {
+    private static void processHarvestJobs(MinecraftServer server) {
+        int pendingPlans = 0;
+        for (HarvestJob job : HARVEST_JOBS.values()) {
+            pendingPlans += job.pending.size();
+        }
+        int limit = Math.max(minHarvestPlansPerTick(), (int) Math.ceil(pendingPlans / (double) harvestIntervalTicks()));
+        int processed = 0;
+        for (ServerLevel level : server.getAllLevels()) {
+            for (HarvestJob job : List.copyOf(HARVEST_JOBS.values())) {
+                if (processed >= limit) {
+                    return;
+                }
+                if (!job.dimension.equals(level.dimension().location().toString())) {
+                    continue;
+                }
+                if (level.getBlockState(job.boxPos).isAir()) {
+                    HARVEST_JOBS.remove(job.boxPos);
+                    continue;
+                }
+                if (!hasHiredFarmer(job.boxPos)) {
+                    HARVEST_JOBS.remove(job.boxPos);
+                    continue;
+                }
+                if (!isFarmerAbleToWork(server, job.boxPos)) {
+                    continue;
+                }
+                while (processed < limit && !job.pending.isEmpty()) {
+                    executeHarvestPlan(level, job.boxPos, job.pending.poll());
+                    processed++;
+                }
+                if (job.pending.isEmpty()) {
+                    HARVEST_JOBS.remove(job.boxPos);
+                }
+                if (processed >= limit) {
+                    return;
+                }
+            }
+        }
+    }
+
+    private static Queue<HarvestPlan> collectHarvestPlans(ServerLevel level, WorkState state, Object npc) {
+        Queue<HarvestPlan> plans = new ArrayDeque<>();
+        Set<BlockPos> plannedStemFruit = new HashSet<>();
+        for (BlockPos base : state.bounds.positions()) {
+            BlockPos cropPos = base.above();
+            BlockState cropState = level.getBlockState(cropPos);
+            Block block = cropState.getBlock();
+            HarvestPlan plan;
+            if (isRightClickHarvestCrop(block)) {
+                plan = planRightClickCrop(level, cropPos, cropState);
+            } else if (state.crop.cropBlock instanceof StemBlock) {
+                plan = planStemFruit(level, cropPos, state.crop.cropBlock);
+                if (plan != null && !plannedStemFruit.add(plan.pos)) {
+                    plan = null;
+                }
+            } else {
+                plan = planRegularCrop(level, cropPos, cropState, state.crop, npc);
+            }
+            if (plan != null) {
+                plans.add(plan);
+            }
+        }
+        return plans;
+    }
+
+    private static HarvestPlan planRightClickCrop(ServerLevel level, BlockPos pos, BlockState state) {
         if (!isRightClickCropMature(state)) {
-            return;
+            return null;
         }
         List<ItemStack> drops = new java.util.ArrayList<>();
         if (state.is(Blocks.SWEET_BERRY_BUSH)) {
@@ -563,45 +628,27 @@ public final class LenientFarmingServer {
         } else {
             drops.addAll(Block.getDrops(state, level, pos, null));
         }
-        BlockPos chestPos = findChestForHarvest(level, boxPos, drops, ItemStack.EMPTY);
-        if (chestPos == null) {
-            return;
-        }
-        insertAll(level, chestPos, drops);
-        resetCropAge(level, pos, state);
+        return new HarvestPlan(HarvestKind.RIGHT_CLICK, pos.immutable(), state, drops, ItemStack.EMPTY, null, false);
     }
 
-    private static void harvestRegularCrop(ServerLevel level, BlockPos boxPos, BlockPos pos, BlockState state, CropPlan crop, Object npc) {
+    private static HarvestPlan planRegularCrop(ServerLevel level, BlockPos pos, BlockState state, CropPlan crop, Object npc) {
         if (!state.is(crop.cropBlock) || !isStandardCropMature(state)) {
-            return;
+            return null;
         }
         List<ItemStack> drops = new java.util.ArrayList<>(getDrops(level, pos, state, npc));
-        ItemStack seedToConsume = reserveSeedFromDropsOrPlanChestConsume(drops, new ItemStack(crop.seed));
-        if (seedToConsume == null) {
-            return;
-        }
-        BlockPos chestPos = findChestForHarvest(level, boxPos, drops, seedToConsume);
-        if (chestPos == null) {
-            return;
-        }
-        if (!seedToConsume.isEmpty() && !consume(level, chestPos, seedToConsume)) {
-            return;
-        }
-        level.setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState());
-        if (level.getBlockState(pos.below()).getBlock() instanceof FarmBlock) {
-            level.setBlockAndUpdate(pos, crop.cropBlock.defaultBlockState());
-        }
-        insertAll(level, chestPos, drops);
+        boolean replantFromDrops = level.getBlockState(pos.below()).getBlock() instanceof FarmBlock
+                && reserveSeedFromDrops(drops, new ItemStack(crop.seed));
+        return new HarvestPlan(HarvestKind.REGULAR, pos.immutable(), state, drops, new ItemStack(crop.seed), crop.cropBlock, replantFromDrops);
     }
 
-    private static void harvestStemFruit(ServerLevel level, BlockPos boxPos, BlockPos stemPos, Block cropBlock) {
+    private static HarvestPlan planStemFruit(ServerLevel level, BlockPos stemPos, Block cropBlock) {
         BlockState stemState = level.getBlockState(stemPos);
         if (!isStemCropReadyForHarvest(stemState, cropBlock)) {
-            return;
+            return null;
         }
         Block fruitBlock = resolveStemFruitBlock(cropBlock);
         if (fruitBlock == null) {
-            return;
+            return null;
         }
         for (Direction direction : Direction.Plane.HORIZONTAL) {
             BlockPos fruitPos = stemPos.relative(direction);
@@ -610,14 +657,106 @@ public final class LenientFarmingServer {
                 continue;
             }
             List<ItemStack> drops = new java.util.ArrayList<>(Block.getDrops(fruitState, level, fruitPos, null));
-            BlockPos chestPos = findChestForHarvest(level, boxPos, drops, ItemStack.EMPTY);
-            if (chestPos == null) {
-                return;
-            }
-            level.setBlockAndUpdate(fruitPos, Blocks.AIR.defaultBlockState());
-            insertAll(level, chestPos, drops);
+            return new HarvestPlan(HarvestKind.STEM_FRUIT, fruitPos.immutable(), fruitState, drops, ItemStack.EMPTY, null, false);
+        }
+        return null;
+    }
+
+    private static void executeHarvestPlan(ServerLevel level, BlockPos boxPos, HarvestPlan plan) {
+        if (!isHarvestPlanStillValid(level, plan)) {
             return;
         }
+        for (BlockPos chestPos : nearbyContainers(level, boxPos)) {
+            HarvestAttempt attempt = tryExecuteHarvestPlan(level, chestPos, plan);
+            if (attempt != HarvestAttempt.NOT_ACCEPTED) {
+                return;
+            }
+        }
+    }
+
+    private static HarvestAttempt tryExecuteHarvestPlan(ServerLevel level, BlockPos chestPos, HarvestPlan plan) {
+        if (plan.kind == HarvestKind.RIGHT_CLICK) {
+            SimulatedInventory inventory = simulateActualInventory(level, chestPos);
+            if (inventory == null || !inventory.insertAll(plan.drops)) {
+                return tryExecuteItemHandlerHarvestPlan(level, chestPos, plan);
+            }
+            inventory.apply(level, chestPos);
+            resetCropAge(level, plan.pos, plan.state);
+            return HarvestAttempt.COMPLETED;
+        }
+        if (plan.kind == HarvestKind.REGULAR) {
+            SimulatedInventory inventory = simulateActualInventory(level, chestPos);
+            if (inventory == null || !inventory.insertAll(plan.drops)) {
+                return tryExecuteItemHandlerHarvestPlan(level, chestPos, plan);
+            }
+            inventory.apply(level, chestPos);
+            level.setBlockAndUpdate(plan.pos, Blocks.AIR.defaultBlockState());
+            if (plan.replantBlock != null && level.getBlockState(plan.pos.below()).getBlock() instanceof FarmBlock) {
+                if (plan.replantFromDrops || consume(level, chestPos, plan.seedTemplate.copy())) {
+                    level.setBlockAndUpdate(plan.pos, plan.replantBlock.defaultBlockState());
+                }
+            }
+            return HarvestAttempt.COMPLETED;
+        }
+        if (plan.kind == HarvestKind.STEM_FRUIT) {
+            SimulatedInventory inventory = simulateActualInventory(level, chestPos);
+            if (inventory == null || !inventory.insertAll(plan.drops)) {
+                return tryExecuteItemHandlerHarvestPlan(level, chestPos, plan);
+            }
+            inventory.apply(level, chestPos);
+            level.setBlockAndUpdate(plan.pos, Blocks.AIR.defaultBlockState());
+            return HarvestAttempt.COMPLETED;
+        }
+        return HarvestAttempt.NOT_ACCEPTED;
+    }
+
+    private static HarvestAttempt tryExecuteItemHandlerHarvestPlan(ServerLevel level, BlockPos chestPos, HarvestPlan plan) {
+        BlockEntity be = level.getBlockEntity(chestPos);
+        if (be == null || be instanceof Container) {
+            return HarvestAttempt.NOT_ACCEPTED;
+        }
+        return be.getCapability(ForgeCapabilities.ITEM_HANDLER).map(handler -> tryExecuteItemHandlerHarvestPlan(level, handler, plan)).orElse(HarvestAttempt.NOT_ACCEPTED);
+    }
+
+    private static HarvestAttempt tryExecuteItemHandlerHarvestPlan(ServerLevel level, IItemHandler handler, HarvestPlan plan) {
+        if (!canInsertAllItemHandler(handler, plan.drops)) {
+            return HarvestAttempt.NOT_ACCEPTED;
+        }
+        if (!insertAllItemHandler(handler, plan.drops)) {
+            return HarvestAttempt.ABORTED;
+        }
+        if (plan.kind == HarvestKind.RIGHT_CLICK) {
+            resetCropAge(level, plan.pos, plan.state);
+            return HarvestAttempt.COMPLETED;
+        }
+        if (plan.kind == HarvestKind.REGULAR) {
+            level.setBlockAndUpdate(plan.pos, Blocks.AIR.defaultBlockState());
+            if (plan.replantBlock != null && level.getBlockState(plan.pos.below()).getBlock() instanceof FarmBlock) {
+                if (plan.replantFromDrops || consumeItemHandler(handler, plan.seedTemplate.copy())) {
+                    level.setBlockAndUpdate(plan.pos, plan.replantBlock.defaultBlockState());
+                }
+            }
+            return HarvestAttempt.COMPLETED;
+        }
+        if (plan.kind == HarvestKind.STEM_FRUIT) {
+            level.setBlockAndUpdate(plan.pos, Blocks.AIR.defaultBlockState());
+            return HarvestAttempt.COMPLETED;
+        }
+        return HarvestAttempt.NOT_ACCEPTED;
+    }
+
+    private static boolean isHarvestPlanStillValid(ServerLevel level, HarvestPlan plan) {
+        BlockState current = level.getBlockState(plan.pos);
+        if (plan.kind == HarvestKind.RIGHT_CLICK) {
+            return current.is(plan.state.getBlock()) && isRightClickCropMature(current);
+        }
+        if (plan.kind == HarvestKind.REGULAR) {
+            return plan.replantBlock != null && current.is(plan.replantBlock) && isStandardCropMature(current);
+        }
+        if (plan.kind == HarvestKind.STEM_FRUIT) {
+            return current.is(plan.state.getBlock());
+        }
+        return false;
     }
 
     private static List<ItemStack> getDrops(ServerLevel level, BlockPos pos, BlockState state, Object npc) {
@@ -627,38 +766,85 @@ public final class LenientFarmingServer {
         return Block.getDrops(state, level, pos, null);
     }
 
-    private static ItemStack reserveSeedFromDropsOrPlanChestConsume(List<ItemStack> drops, ItemStack seedTemplate) {
+    private static boolean reserveSeedFromDrops(List<ItemStack> drops, ItemStack seedTemplate) {
         if (seedTemplate.isEmpty()) {
-            return null;
+            return false;
         }
         for (ItemStack drop : drops) {
             if (ItemStack.isSameItemSameTags(drop, seedTemplate) && drop.getCount() > 0) {
                 drop.shrink(1);
-                return ItemStack.EMPTY;
+                return true;
             }
         }
-        ItemStack seed = seedTemplate.copy();
-        seed.setCount(1);
-        return seed;
+        return false;
     }
 
-    private static BlockPos findChestForHarvest(ServerLevel level, BlockPos boxPos, List<ItemStack> drops, ItemStack seedToConsume) {
-        BlockPos best = null;
-        double bestDistance = Double.MAX_VALUE;
-        for (BlockPos chestPos : nearbyContainers(level, boxPos)) {
-            if (!seedToConsume.isEmpty() && countItem(level, chestPos, seedToConsume) < seedToConsume.getCount()) {
-                continue;
-            }
-            if (!canInsertAll(level, chestPos, drops)) {
-                continue;
-            }
-            double distance = chestPos.distSqr(boxPos);
-            if (distance < bestDistance) {
-                bestDistance = distance;
-                best = chestPos;
+    private static boolean canInsertAllItemHandler(IItemHandler handler, List<ItemStack> stacks) {
+        List<ItemStack> remainingStacks = new java.util.ArrayList<>();
+        for (ItemStack stack : stacks) {
+            if (!stack.isEmpty()) {
+                remainingStacks.add(stack.copy());
             }
         }
-        return best;
+        for (int slot = 0; slot < handler.getSlots(); slot++) {
+            ItemStack simulatedSlot = handler.getStackInSlot(slot).copy();
+            for (ItemStack stack : remainingStacks) {
+                if (stack.isEmpty()) {
+                    continue;
+                }
+                if (!simulatedSlot.isEmpty() && !ItemStack.isSameItemSameTags(simulatedSlot, stack)) {
+                    continue;
+                }
+                ItemStack rejected = handler.insertItem(slot, stack, true);
+                int acceptedByHandler = stack.getCount() - rejected.getCount();
+                int slotLimit = Math.min(stack.getMaxStackSize(), handler.getSlotLimit(slot));
+                int simulatedSpace = simulatedSlot.isEmpty() ? slotLimit : Math.max(0, slotLimit - simulatedSlot.getCount());
+                int moved = Math.min(acceptedByHandler, simulatedSpace);
+                if (moved <= 0) {
+                    continue;
+                }
+                if (simulatedSlot.isEmpty()) {
+                    simulatedSlot = stack.copy();
+                    simulatedSlot.setCount(moved);
+                } else {
+                    simulatedSlot.grow(moved);
+                }
+                stack.shrink(moved);
+            }
+        }
+        for (ItemStack stack : remainingStacks) {
+            if (!stack.isEmpty()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean insertAllItemHandler(IItemHandler handler, List<ItemStack> stacks) {
+        for (ItemStack stack : stacks) {
+            ItemStack remaining = stack.copy();
+            for (int i = 0; i < handler.getSlots() && !remaining.isEmpty(); i++) {
+                remaining = handler.insertItem(i, remaining, false);
+            }
+            if (!remaining.isEmpty()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean consumeItemHandler(IItemHandler handler, ItemStack stack) {
+        if (stack.isEmpty()) {
+            return true;
+        }
+        int remaining = stack.getCount();
+        for (int i = 0; i < handler.getSlots() && remaining > 0; i++) {
+            ItemStack existing = handler.getStackInSlot(i);
+            if (ItemStack.isSameItemSameTags(existing, stack)) {
+                remaining -= handler.extractItem(i, remaining, false).getCount();
+            }
+        }
+        return remaining <= 0;
     }
 
     private static boolean isRightClickHarvestCrop(Block block) {
@@ -749,109 +935,47 @@ public final class LenientFarmingServer {
         return null;
     }
 
-    private static boolean canInsertAll(ServerLevel level, BlockPos chestPos, List<ItemStack> stacks) {
-        List<ItemStack> remaining = new java.util.ArrayList<>();
-        for (ItemStack stack : stacks) {
-            if (!stack.isEmpty()) {
-                remaining.add(stack.copy());
-            }
-        }
-        if (remaining.isEmpty()) {
-            return true;
-        }
-        BlockEntity be = level.getBlockEntity(chestPos);
-        if (be == null) {
-            return false;
-        }
-        if (be instanceof Container container) {
-            return canInsertAll(container, remaining);
-        }
-        return be.getCapability(ForgeCapabilities.ITEM_HANDLER).map(handler -> canInsertAll(handler, remaining)).orElse(false);
-    }
-
-    private static boolean canInsertAll(Container container, List<ItemStack> remaining) {
-        java.util.ArrayList<ItemStack> slots = new java.util.ArrayList<>();
-        for (int i = 0; i < container.getContainerSize(); i++) {
-            slots.add(container.getItem(i).copy());
-        }
-        for (ItemStack stack : remaining) {
-            simulateInsert(slots, stack);
-            if (!stack.isEmpty()) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static void simulateInsert(List<ItemStack> slots, ItemStack stack) {
-        for (ItemStack existing : slots) {
+    private static void simulateInsert(List<SimulatedSlot> slots, ItemStack stack, int defaultSlotLimit) {
+        for (SimulatedSlot slot : slots) {
+            ItemStack existing = slot.stack;
             if (stack.isEmpty()) {
                 return;
             }
-            if (ItemStack.isSameItemSameTags(existing, stack) && existing.getCount() < existing.getMaxStackSize()) {
-                int moved = Math.min(stack.getCount(), existing.getMaxStackSize() - existing.getCount());
+            if (!slot.canPlace(stack)) {
+                continue;
+            }
+            int slotLimit = Math.min(existing.getMaxStackSize(), defaultSlotLimit);
+            if (ItemStack.isSameItemSameTags(existing, stack) && existing.getCount() < slotLimit) {
+                int moved = Math.min(stack.getCount(), slotLimit - existing.getCount());
                 existing.grow(moved);
                 stack.shrink(moved);
             }
         }
         for (int i = 0; i < slots.size() && !stack.isEmpty(); i++) {
-            ItemStack existing = slots.get(i);
+            SimulatedSlot slot = slots.get(i);
+            ItemStack existing = slot.stack;
             if (existing.isEmpty()) {
-                int moved = Math.min(stack.getCount(), stack.getMaxStackSize());
+                if (!slot.canPlace(stack)) {
+                    continue;
+                }
+                int moved = Math.min(stack.getCount(), Math.min(stack.getMaxStackSize(), defaultSlotLimit));
                 ItemStack copy = stack.copy();
                 copy.setCount(moved);
-                slots.set(i, copy);
+                slot.stack = copy;
                 stack.shrink(moved);
             }
         }
     }
 
-    private static boolean canInsertAll(IItemHandler handler, List<ItemStack> stacks) {
-        java.util.ArrayList<ItemStack> remaining = new java.util.ArrayList<>();
-        for (ItemStack stack : stacks) {
-            if (!stack.isEmpty()) {
-                remaining.add(stack.copy());
-            }
+    private static SimulatedInventory simulateActualInventory(ServerLevel level, BlockPos chestPos) {
+        BlockEntity be = level.getBlockEntity(chestPos);
+        if (be == null) {
+            return null;
         }
-        for (int i = 0; i < handler.getSlots(); i++) {
-            ItemStack simulatedSlot = handler.getStackInSlot(i).copy();
-            for (int j = 0; j < remaining.size(); j++) {
-                ItemStack stack = remaining.get(j);
-                if (stack.isEmpty()) {
-                    continue;
-                }
-                if (!simulatedSlot.isEmpty() && !ItemStack.isSameItemSameTags(simulatedSlot, stack)) {
-                    continue;
-                }
-                ItemStack rejected = handler.insertItem(i, stack, true);
-                int accepted = stack.getCount() - rejected.getCount();
-                if (accepted <= 0) {
-                    continue;
-                }
-                int slotLimit = Math.min(stack.getMaxStackSize(), handler.getSlotLimit(i));
-                int simulatedSpace = simulatedSlot.isEmpty() ? slotLimit : Math.max(0, slotLimit - simulatedSlot.getCount());
-                int moved = Math.min(accepted, simulatedSpace);
-                if (moved <= 0) {
-                    continue;
-                }
-                if (simulatedSlot.isEmpty()) {
-                    simulatedSlot = stack.copy();
-                    simulatedSlot.setCount(moved);
-                } else {
-                    simulatedSlot.grow(moved);
-                }
-                stack.shrink(moved);
-            }
+        if (be instanceof Container container) {
+            return SimulatedInventory.create(container);
         }
-        return remaining.stream().allMatch(ItemStack::isEmpty);
-    }
-
-    private static void insertAll(ServerLevel level, BlockPos chestPos, List<ItemStack> stacks) {
-        for (ItemStack stack : stacks) {
-            if (!stack.isEmpty()) {
-                insert(level, chestPos, stack.copy());
-            }
-        }
+        return null;
     }
 
     private static ServerPlayer nearestPlayer(ServerLevel level, BlockPos pos) {
@@ -981,22 +1105,24 @@ public final class LenientFarmingServer {
     }
 
     private static List<BlockPos> nearbyContainers(ServerLevel level, BlockPos boxPos) {
-        java.util.ArrayList<BlockPos> result = new java.util.ArrayList<>();
-        for (int x = -8; x <= 8; x++) {
-            for (int y = -3; y <= 3; y++) {
-                for (int z = -8; z <= 8; z++) {
+        java.util.LinkedHashSet<BlockPos> result = new java.util.LinkedHashSet<>();
+        int horizontalRadius = containerSearchHorizontalRadius();
+        int verticalRadius = containerSearchVerticalRadius();
+        for (int x = -horizontalRadius; x <= horizontalRadius; x++) {
+            for (int y = -verticalRadius; y <= verticalRadius; y++) {
+                for (int z = -horizontalRadius; z <= horizontalRadius; z++) {
                     BlockPos pos = boxPos.offset(x, y, z);
                     if (usableChest(level, pos)) {
                         result.add(pos.immutable());
                         BlockPos otherHalf = otherDoubleChestHalf(level, pos);
-                        if (otherHalf != null && usableChest(level, otherHalf) && !result.contains(otherHalf)) {
+                        if (otherHalf != null && usableChest(level, otherHalf)) {
                             result.add(otherHalf.immutable());
                         }
                     }
                 }
             }
         }
-        return result;
+        return new java.util.ArrayList<>(result);
     }
 
     private static BlockPos otherDoubleChestHalf(ServerLevel level, BlockPos pos) {
@@ -1239,6 +1365,34 @@ public final class LenientFarmingServer {
         return value instanceof Enum<?> enumValue && enumValue.name().equals(name);
     }
 
+    private static int workIntervalTicks() {
+        return BeautifulFarmConfig.WORK_INTERVAL_TICKS.get();
+    }
+
+    private static int statusIntervalTicks() {
+        return BeautifulFarmConfig.STATUS_INTERVAL_TICKS.get();
+    }
+
+    private static int harvestIntervalTicks() {
+        return BeautifulFarmConfig.HARVEST_INTERVAL_TICKS.get();
+    }
+
+    private static int minHarvestPlansPerTick() {
+        return BeautifulFarmConfig.MIN_HARVEST_PLANS_PER_TICK.get();
+    }
+
+    private static int containerSearchHorizontalRadius() {
+        return BeautifulFarmConfig.CONTAINER_SEARCH_HORIZONTAL_RADIUS.get();
+    }
+
+    private static int containerSearchVerticalRadius() {
+        return BeautifulFarmConfig.CONTAINER_SEARCH_VERTICAL_RADIUS.get();
+    }
+
+    private static int droppedItemPickupDelayTicks() {
+        return BeautifulFarmConfig.DROPPED_ITEM_PICKUP_DELAY_TICKS.get();
+    }
+
     private static void invalidateOriginalWorkflow(ServerLevel level, BlockPos boxPos) {
         try {
             Class<?> managerClass = Class.forName("com.xiaoliang.simukraft.utils.FarmlandManager");
@@ -1382,6 +1536,168 @@ public final class LenientFarmingServer {
         private int dirt;
         private int seeds;
         private final Map<MaterialNeedKey, Integer> materials = new LinkedHashMap<>();
+    }
+
+    private enum HarvestKind {
+        REGULAR,
+        RIGHT_CLICK,
+        STEM_FRUIT
+    }
+
+    private enum HarvestAttempt {
+        NOT_ACCEPTED,
+        COMPLETED,
+        ABORTED
+    }
+
+    private static final class HarvestPlan {
+        private final HarvestKind kind;
+        private final BlockPos pos;
+        private final BlockState state;
+        private final List<ItemStack> drops;
+        private final ItemStack seedTemplate;
+        private final Block replantBlock;
+        private final boolean replantFromDrops;
+
+        private HarvestPlan(HarvestKind kind, BlockPos pos, BlockState state, List<ItemStack> drops, ItemStack seedTemplate, Block replantBlock, boolean replantFromDrops) {
+            this.kind = kind;
+            this.pos = pos;
+            this.state = state;
+            this.drops = drops;
+            this.seedTemplate = seedTemplate == null ? ItemStack.EMPTY : seedTemplate;
+            this.replantBlock = replantBlock;
+            this.replantFromDrops = replantFromDrops;
+        }
+    }
+
+    private static final class HarvestJob {
+        private final String dimension;
+        private final BlockPos boxPos;
+        private final Queue<HarvestPlan> pending;
+
+        private HarvestJob(String dimension, BlockPos boxPos, Queue<HarvestPlan> pending) {
+            this.dimension = dimension;
+            this.boxPos = boxPos;
+            this.pending = pending;
+        }
+    }
+
+    private static final class SimulatedInventory {
+        private final java.util.ArrayList<SimulatedSlot> slots;
+        private final int defaultSlotLimit;
+
+        private SimulatedInventory(java.util.ArrayList<SimulatedSlot> slots, int defaultSlotLimit) {
+            this.slots = slots;
+            this.defaultSlotLimit = defaultSlotLimit;
+        }
+
+        private static SimulatedInventory create(ServerLevel level, BlockPos chestPos) {
+            BlockEntity be = level.getBlockEntity(chestPos);
+            if (be == null) {
+                return null;
+            }
+            if (be instanceof Container container) {
+                return create(container);
+            }
+            return null;
+        }
+
+        private static SimulatedInventory create(Container container) {
+            java.util.ArrayList<SimulatedSlot> slots = new java.util.ArrayList<>();
+            for (int i = 0; i < container.getContainerSize(); i++) {
+                int slot = i;
+                slots.add(new SimulatedSlot(container.getItem(i).copy(), stack -> container.canPlaceItem(slot, stack)));
+            }
+            return new SimulatedInventory(slots, container.getMaxStackSize());
+        }
+
+        private boolean canConsume(ItemStack stack) {
+            return stack.isEmpty() || count(stack) >= stack.getCount();
+        }
+
+        private void consume(ItemStack stack) {
+            if (stack.isEmpty()) {
+                return;
+            }
+            int remaining = stack.getCount();
+            for (SimulatedSlot slot : slots) {
+                if (remaining <= 0) {
+                    return;
+                }
+                if (ItemStack.isSameItemSameTags(slot.stack, stack)) {
+                    int taken = Math.min(remaining, slot.stack.getCount());
+                    slot.stack.shrink(taken);
+                    remaining -= taken;
+                }
+            }
+        }
+
+        private boolean canInsertAll(List<ItemStack> stacks) {
+            SimulatedInventory copy = copy();
+            return copy.insertAll(stacks);
+        }
+
+        private boolean insertAll(List<ItemStack> stacks) {
+            for (ItemStack stack : stacks) {
+                if (stack.isEmpty()) {
+                    continue;
+                }
+                ItemStack remaining = stack.copy();
+                simulateInsert(slots, remaining, defaultSlotLimit);
+                if (!remaining.isEmpty()) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private int count(ItemStack template) {
+            int total = 0;
+            for (SimulatedSlot slot : slots) {
+                if (ItemStack.isSameItemSameTags(slot.stack, template)) {
+                    total += slot.stack.getCount();
+                }
+            }
+            return total;
+        }
+
+        private SimulatedInventory copy() {
+            java.util.ArrayList<SimulatedSlot> copied = new java.util.ArrayList<>();
+            for (SimulatedSlot slot : slots) {
+                copied.add(slot.copy());
+            }
+            return new SimulatedInventory(copied, defaultSlotLimit);
+        }
+
+        private void apply(ServerLevel level, BlockPos chestPos) {
+            BlockEntity be = level.getBlockEntity(chestPos);
+            if (!(be instanceof Container container)) {
+                return;
+            }
+            int size = Math.min(container.getContainerSize(), slots.size());
+            for (int i = 0; i < size; i++) {
+                container.setItem(i, slots.get(i).stack.copy());
+            }
+            container.setChanged();
+        }
+    }
+
+    private static final class SimulatedSlot {
+        private ItemStack stack;
+        private final java.util.function.Predicate<ItemStack> canPlace;
+
+        private SimulatedSlot(ItemStack stack, java.util.function.Predicate<ItemStack> canPlace) {
+            this.stack = stack;
+            this.canPlace = canPlace;
+        }
+
+        private boolean canPlace(ItemStack stack) {
+            return canPlace.test(stack);
+        }
+
+        private SimulatedSlot copy() {
+            return new SimulatedSlot(stack.copy(), canPlace);
+        }
     }
 
     private record MaterialNeedKey(BlockState state) {
