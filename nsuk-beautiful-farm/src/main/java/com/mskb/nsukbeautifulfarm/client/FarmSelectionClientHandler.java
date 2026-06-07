@@ -175,13 +175,20 @@ public final class FarmSelectionClientHandler {
         if (!isFarmSelectionScreen(event.getScreen())) {
             return;
         }
-        if (selectedOption != DecorationOption.WATER || config.waterStyle == FarmDecorationConfig.WaterStyle.NONE) {
+        if ((selectedOption == DecorationOption.WATER && config.waterStyle == FarmDecorationConfig.WaterStyle.NONE)
+                || (selectedOption == DecorationOption.SCARECROW && config.scarecrowStyle == FarmDecorationConfig.ScarecrowStyle.NONE)
+                || (selectedOption != DecorationOption.WATER && selectedOption != DecorationOption.SCARECROW)) {
             return;
         }
         Direction facing = cameraDirection(Minecraft.getInstance());
         int step = event.getScrollDelta() > 0 ? 1 : -1;
-        config.waterOffsetX += facing.getStepX() * step;
-        config.waterOffsetZ += facing.getStepZ() * step;
+        if (selectedOption == DecorationOption.WATER) {
+            config.waterOffsetX += facing.getStepX() * step;
+            config.waterOffsetZ += facing.getStepZ() * step;
+        } else {
+            config.scarecrowOffsetX += facing.getStepX() * step;
+            config.scarecrowOffsetZ += facing.getStepZ() * step;
+        }
         event.setCanceled(true);
     }
 

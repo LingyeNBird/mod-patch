@@ -113,6 +113,8 @@ public final class FarmDecorationData {
         json.addProperty("coverFacing", config.coverFacing.getName());
         json.addProperty("scarecrowStyle", config.scarecrowStyle.name());
         json.addProperty("scarecrowFacing", config.scarecrowFacing.getName());
+        json.addProperty("scarecrowOffsetX", config.scarecrowOffsetX);
+        json.addProperty("scarecrowOffsetZ", config.scarecrowOffsetZ);
         json.addProperty("scarecrowSpacing", config.scarecrowSpacing);
         return json;
     }
@@ -132,6 +134,8 @@ public final class FarmDecorationData {
         config.coverFacing = direction(string(json, "coverFacing"), Direction.NORTH);
         config.scarecrowStyle = enumValue(FarmDecorationConfig.ScarecrowStyle.class, string(json, "scarecrowStyle"), FarmDecorationConfig.ScarecrowStyle.NONE);
         config.scarecrowFacing = direction(string(json, "scarecrowFacing"), Direction.NORTH);
+        config.scarecrowOffsetX = integer(json, "scarecrowOffsetX");
+        config.scarecrowOffsetZ = integer(json, "scarecrowOffsetZ");
         config.scarecrowSpacing = json.has("scarecrowSpacing") ? FarmDecorationConfig.clampScarecrowSpacing(integer(json, "scarecrowSpacing")) : 3;
         return config;
     }

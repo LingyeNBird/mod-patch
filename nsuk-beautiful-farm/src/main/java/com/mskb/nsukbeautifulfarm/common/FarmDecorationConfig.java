@@ -21,6 +21,8 @@ public final class FarmDecorationConfig {
 
     public ScarecrowStyle scarecrowStyle = ScarecrowStyle.NONE;
     public Direction scarecrowFacing = Direction.NORTH;
+    public int scarecrowOffsetX = 0;
+    public int scarecrowOffsetZ = 0;
     public int scarecrowSpacing = 3;
 
     public CompoundTag toTag() {
@@ -38,6 +40,8 @@ public final class FarmDecorationConfig {
         tag.putString("coverFacing", coverFacing.getName());
         tag.putString("scarecrowStyle", scarecrowStyle.name());
         tag.putString("scarecrowFacing", scarecrowFacing.getName());
+        tag.putInt("scarecrowOffsetX", scarecrowOffsetX);
+        tag.putInt("scarecrowOffsetZ", scarecrowOffsetZ);
         tag.putInt("scarecrowSpacing", scarecrowSpacing);
         return tag;
     }
@@ -57,6 +61,8 @@ public final class FarmDecorationConfig {
         config.coverFacing = readDirection(tag.getString("coverFacing"), Direction.NORTH);
         config.scarecrowStyle = readEnum(ScarecrowStyle.class, tag.getString("scarecrowStyle"), ScarecrowStyle.NONE);
         config.scarecrowFacing = readDirection(tag.getString("scarecrowFacing"), Direction.NORTH);
+        config.scarecrowOffsetX = tag.getInt("scarecrowOffsetX");
+        config.scarecrowOffsetZ = tag.getInt("scarecrowOffsetZ");
         config.scarecrowSpacing = tag.contains("scarecrowSpacing") ? clampScarecrowSpacing(tag.getInt("scarecrowSpacing")) : 3;
         return config;
     }

@@ -48,8 +48,8 @@ public final class DecorationPlanner {
         }
         int spacing = FarmDecorationConfig.clampScarecrowSpacing(config.scarecrowSpacing) + 1;
         List<BlockPos> positions = new ArrayList<>();
-        for (int x = alignedStart(min.getX(), 0, spacing); x <= max.getX(); x += spacing) {
-            for (int z = alignedStart(min.getZ(), 0, spacing); z <= max.getZ(); z += spacing) {
+        for (int x = alignedStart(min.getX(), config.scarecrowOffsetX, spacing); x <= max.getX(); x += spacing) {
+            for (int z = alignedStart(min.getZ(), config.scarecrowOffsetZ, spacing); z <= max.getZ(); z += spacing) {
                 BlockPos ground = new BlockPos(x, min.getY(), z);
                 if (fitsScarecrow(min, max, ground, config)) {
                     positions.add(ground);
@@ -99,10 +99,19 @@ public final class DecorationPlanner {
                 blocks.put(new BlockPos(maxX, y, z), material);
             }
         }
+        if (config.borderStyle == FarmDecorationConfig.BorderStyle.FULL_WALL) {
+            addWallGateAir(blocks, min, max, config, y);
+        }
         if (!full || fence) {
             addFenceGate(blocks, min, max, config, fence);
         }
         connectBorderBlocks(blocks, y);
+    }
+
+    private static void addWallGateAir(Map<BlockPos, BlockState> blocks, BlockPos min, BlockPos max, FarmDecorationConfig config, int y) {
+        for (BlockPos pos : centeredSidePositions(min, max, config.borderFacing, y)) {
+            blocks.put(pos, Blocks.AIR.defaultBlockState());
+        }
     }
 
     private static void connectBorderBlocks(Map<BlockPos, BlockState> blocks, int y) {

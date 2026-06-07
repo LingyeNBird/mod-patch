@@ -1567,20 +1567,38 @@ public final class LenientFarmingServer {
     }
 
     private static boolean isFarmerAbleToWork(MinecraftServer server, BlockPos boxPos) {
+        Object uuid;
         try {
-            Object uuid = getHiredFarmerMethod().invoke(null, boxPos);
-            if (uuid == null) {
-                return false;
-            }
-            Object npc = findNpcByUuidMethod().invoke(null, server, uuid);
-            if (npc == null || Boolean.TRUE.equals(npc.getClass().getMethod("isSleeping").invoke(npc))) {
-                return false;
-            }
+            uuid = getHiredFarmerMethod().invoke(null, boxPos);
+        } catch (ReflectiveOperationException | LinkageError ignored) {
+            return hasHiredFarmer(boxPos);
+        }
+        if (uuid == null) {
+            return false;
+        }
+        Object npc;
+        try {
+            npc = findNpcByUuidMethod().invoke(null, server, uuid);
+        } catch (ReflectiveOperationException | LinkageError ignored) {
+            return false;
+        }
+        if (npc == null || isNpcSleeping(npc)) {
+            return false;
+        }
+        try {
             Object workStatus = npc.getClass().getMethod("getWorkStatus").invoke(npc);
             Object workSubState = npc.getClass().getMethod("getWorkSubState").invoke(npc);
             return hasEnumName(workStatus, "WORKING") && hasEnumName(workSubState, "WORKING");
         } catch (ReflectiveOperationException | LinkageError ignored) {
-            return hasHiredFarmer(boxPos);
+            return false;
+        }
+    }
+
+    private static boolean isNpcSleeping(Object npc) {
+        try {
+            return Boolean.TRUE.equals(npc.getClass().getMethod("isSleeping").invoke(npc));
+        } catch (ReflectiveOperationException | LinkageError ignored) {
+            return false;
         }
     }
 
