@@ -21,6 +21,11 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.decoration.ArmorStand;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
@@ -34,6 +39,7 @@ import org.lwjgl.glfw.GLFW;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.List;
 
 public final class FarmSelectionClientHandler {
@@ -55,6 +61,7 @@ public final class FarmSelectionClientHandler {
     private static boolean physicalUiActive;
     private static PhysicalUi physicalUi;
     private static BlockPos lastControlBoxPos;
+    private static final List<ArmorStand> previewArmorStands = new ArrayList<>();
 
     private FarmSelectionClientHandler() {
     }
@@ -141,6 +148,7 @@ public final class FarmSelectionClientHandler {
             if (boxPos != null) {
                 BeautifulFarmNetwork.CHANNEL.sendToServer(new SaveFarmDecorationPacket(boxPos, config));
             }
+            clearPreviewArmorStands();
         }
     }
 
@@ -170,7 +178,7 @@ public final class FarmSelectionClientHandler {
         if (selectedOption != DecorationOption.WATER || config.waterStyle == FarmDecorationConfig.WaterStyle.NONE) {
             return;
         }
-        Direction facing = Minecraft.getInstance().player == null ? Direction.NORTH : Minecraft.getInstance().player.getDirection();
+        Direction facing = cameraDirection(Minecraft.getInstance());
         int step = event.getScrollDelta() > 0 ? 1 : -1;
         config.waterOffsetX += facing.getStepX() * step;
         config.waterOffsetZ += facing.getStepZ() * step;
@@ -199,6 +207,7 @@ public final class FarmSelectionClientHandler {
         }
         Minecraft mc = Minecraft.getInstance();
         if (mc.screen == null || mc.level == null || !isFarmSelectionScreen(mc.screen)) {
+            clearPreviewArmorStands();
             return;
         }
         List<DecorationBlockPlan> plans = currentPlans();
@@ -211,6 +220,7 @@ public final class FarmSelectionClientHandler {
                 renderPreviewBlock(mc, event, buffer, plan.pos(), plan.state(), camX, camY, camZ);
             }
         }
+        renderArmorStandScarecrowPreviews(mc, event, buffer, camX, camY, camZ);
         for (BlockPos pos : currentWaterPositions()) {
             renderPreviewBlock(mc, event, buffer, pos, WATER_MASK, camX, camY, camZ);
         }
@@ -424,6 +434,41 @@ public final class FarmSelectionClientHandler {
         return DecorationPlanner.waterPositions(min, max, config);
     }
 
+    private static void renderArmorStandScarecrowPreviews(Minecraft mc, RenderLevelStageEvent event, MultiBufferSource.BufferSource buffer,
+                                                          double camX, double camY, double camZ) {
+        clearPreviewArmorStands();
+        if (config.scarecrowStyle != FarmDecorationConfig.ScarecrowStyle.ARMOR_STAND_1) {
+            return;
+        }
+        BlockPos p1 = point(1);
+        BlockPos p2 = point(2);
+        if (p1 == null || p2 == null) {
+            return;
+        }
+        BlockPos min = new BlockPos(Math.min(p1.getX(), p2.getX()), Math.min(p1.getY(), p2.getY()), Math.min(p1.getZ(), p2.getZ()));
+        BlockPos max = new BlockPos(Math.max(p1.getX(), p2.getX()), Math.max(p1.getY(), p2.getY()), Math.max(p1.getZ(), p2.getZ()));
+        for (BlockPos ground : DecorationPlanner.scarecrowGroundPositions(min, max, config)) {
+            ArmorStand stand = new ArmorStand(EntityType.ARMOR_STAND, mc.level);
+            stand.addTag("nsukbeautifulfarm_preview");
+            stand.setNoGravity(true);
+            stand.noPhysics = true;
+            stand.setInvulnerable(true);
+            stand.setPos(ground.getX() + 0.5D, ground.getY() + 1.0D, ground.getZ() + 0.5D);
+            stand.setYRot(config.scarecrowFacing.toYRot());
+            stand.setItemSlot(EquipmentSlot.CHEST, new ItemStack(Items.LEATHER_CHESTPLATE));
+            stand.setItemSlot(EquipmentSlot.HEAD, new ItemStack(Items.CARVED_PUMPKIN));
+            previewArmorStands.add(stand);
+            mc.getEntityRenderDispatcher().render(stand, stand.getX() - camX, stand.getY() - camY, stand.getZ() - camZ, stand.getYRot(), event.getPartialTick(), event.getPoseStack(), buffer, LightTexture.FULL_BRIGHT);
+        }
+    }
+
+    private static void clearPreviewArmorStands() {
+        for (ArmorStand stand : previewArmorStands) {
+            stand.discard();
+        }
+        previewArmorStands.clear();
+    }
+
     private static boolean isFarmSelectionScreen(Screen screen) {
         if (screen == null) {
             return false;
@@ -499,9 +544,9 @@ public final class FarmSelectionClientHandler {
     private static void changeMaterial(int delta) {
         switch (selectedOption) {
             case BORDER -> config.borderMaterial = cycle(materialsForBorder(), config.borderMaterial, delta);
-            case WATER -> config.waterSpacing = FarmDecorationConfig.clampSpacing(config.waterSpacing + delta);
+            case WATER -> config.waterSpacing = cycleInt(config.waterSpacing, delta, 2, 8);
             case WATER_COVER -> config.coverMaterial = cycle(materialsForCover(), config.coverMaterial, delta);
-            case SCARECROW -> config.scarecrowSpacing = FarmDecorationConfig.clampScarecrowSpacing(config.scarecrowSpacing + delta);
+            case SCARECROW -> config.scarecrowSpacing = cycleInt(config.scarecrowSpacing, delta, 3, 10);
             default -> {
             }
         }
@@ -538,6 +583,19 @@ public final class FarmSelectionClientHandler {
         int index = 0;
         for (int i = 0; i < values.length; i++) if (values[i].equals(current)) index = i;
         return values[Math.floorMod(index + delta, values.length)];
+    }
+
+    private static int cycleInt(int current, int delta, int min, int max) {
+        int size = max - min + 1;
+        return min + Math.floorMod(current - min + delta, size);
+    }
+
+    private static Direction cameraDirection(Minecraft mc) {
+        Vector3f look = mc.gameRenderer.getMainCamera().getLookVector();
+        if (Math.abs(look.x()) > Math.abs(look.z())) {
+            return look.x() > 0.0F ? Direction.EAST : Direction.WEST;
+        }
+        return look.z() > 0.0F ? Direction.SOUTH : Direction.NORTH;
     }
 
     private static String styleName() {
